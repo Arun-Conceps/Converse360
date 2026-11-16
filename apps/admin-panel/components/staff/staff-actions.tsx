@@ -6,7 +6,7 @@ import { SecretReveal } from '@/components/staff/secret-reveal';
 import { FormMessage, Select } from '@/components/ui/form';
 import { SubmitButton } from '@/components/ui/submit-button';
 import { staffAction, type StaffActionState } from '@/lib/actions/staff';
-import { ROLE_LABEL, STAFF_ROLES, type StaffRole } from '@/lib/staff/roles';
+import type { RoleOption } from '@/components/staff/create-staff';
 
 /**
  * Everything a Super Admin can do to one staff account, in one form. Each
@@ -19,11 +19,15 @@ import { ROLE_LABEL, STAFF_ROLES, type StaffRole } from '@/lib/staff/roles';
 export function StaffActions({
   staffId,
   role,
+  roles,
   isActive,
   isSelf,
 }: {
   staffId: string;
-  role: StaffRole;
+  /** The person's current role key. */
+  role: string;
+  /** Roles the signed-in user is allowed to give. */
+  roles: RoleOption[];
   isActive: boolean;
   isSelf: boolean;
 }) {
@@ -49,9 +53,9 @@ export function StaffActions({
                 className="w-auto"
                 aria-label="Role"
               >
-                {STAFF_ROLES.map((value) => (
-                  <option key={value} value={value}>
-                    {ROLE_LABEL[value]}
+                {roles.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.name}
                   </option>
                 ))}
               </Select>

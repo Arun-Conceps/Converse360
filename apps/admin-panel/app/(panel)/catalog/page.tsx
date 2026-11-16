@@ -80,7 +80,7 @@ export default async function CatalogPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Platform"
+        eyebrow="Settings"
         title="AI Catalog"
         description="The Converse 01–06 personas customers choose from. Aliases are product personas, not six different foundation models — several may route to the same backend."
         actions={

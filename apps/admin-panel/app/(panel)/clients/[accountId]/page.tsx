@@ -45,7 +45,7 @@ import {
 } from '@/lib/queries/clients';
 import { getRosterEntry } from '@/lib/queries/roster';
 import { assignableStaff } from '@/lib/queries/staff';
-import { ROLE_LABEL } from '@/lib/staff/roles';
+import { listRoles, roleName } from '@/lib/staff/role-store';
 
 export const metadata: Metadata = {
   title: 'Customer 360 · Converse360 Control Center',
@@ -64,7 +64,7 @@ export default async function ClientOverviewPage({
   if (!client) notFound();
 
   const window = await resolveWindow({ period: '30d' });
-  const [performance, notes, tasks, tickets, transitions, staffList] =
+  const [performance, notes, tasks, tickets, transitions, staffList, roles] =
     await Promise.all([
       getPerformance(accountId, window),
       listNotes(accountId),
@@ -72,6 +72,7 @@ export default async function ClientOverviewPage({
       listClientTickets(accountId),
       listLifecycleEvents(accountId),
       assignableStaff(),
+      listRoles(),
     ]);
 
   const issues = client.health.checks.filter(isIncident);
@@ -85,7 +86,7 @@ export default async function ClientOverviewPage({
   const staffOptions = staffList.map((s) => ({
     id: s.id,
     name: s.name,
-    role: ROLE_LABEL[s.role],
+    role: roleName(s.role, roles),
   }));
 
   return (

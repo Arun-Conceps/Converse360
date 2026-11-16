@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Converse360",
+    "slug": "converse360",
+    "scheme": "converse360",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "in.conceps.converse360"
+    },
+    "android": {
+      "package": "in.conceps.converse360"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-web-browser",
+      "expo-font"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

@@ -28,7 +28,7 @@ export function FilterBar({
       <div className="flex items-center gap-3">
         <button
           type="submit"
-          className="bg-primary hover:bg-primary-hover rounded-lg px-3.5 py-2 text-sm font-semibold text-white transition"
+          className="bg-primary hover:bg-primary-hover rounded-lg px-3.5 py-2 text-sm font-semibold text-on-primary transition"
         >
           Apply
         </button>

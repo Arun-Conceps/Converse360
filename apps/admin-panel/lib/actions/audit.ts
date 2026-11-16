@@ -44,6 +44,8 @@ export type AuditTargetType =
   | 'client_task'
   | 'ticket'
   | 'staff'
+  // Custom roles (migration 101)
+  | 'role'
   | 'catalog'
   | 'settings'
   | 'export';

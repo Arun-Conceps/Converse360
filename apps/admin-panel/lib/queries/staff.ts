@@ -3,17 +3,19 @@ import 'server-only';
 import { cache } from 'react';
 
 import { prisma } from '@/lib/prisma';
-import { isStaffRole, type StaffRole } from '@/lib/staff/roles';
 
 /**
  * Staff, minus the password hash. Nothing outside lib/auth.ts and the staff
  * actions ever selects `password_hash`.
+ *
+ * `role` is the role KEY — a built-in or a custom role (migration 101). Turn
+ * it into a name with `roleName()` from lib/staff/role-store.ts.
  */
 export type StaffMember = {
   id: string;
   email: string;
   name: string;
-  role: StaffRole;
+  role: string;
   isActive: boolean;
   lastLoginAt: Date | null;
   createdAt: Date;
@@ -38,22 +40,16 @@ export const listStaff = cache(
       select: SAFE_SELECT,
       orderBy: [{ is_active: 'desc' }, { full_name: 'asc' }],
     });
-    return rows.flatMap((row) =>
-      isStaffRole(row.role)
-        ? [
-            {
-              id: row.id,
-              email: row.email,
-              name: row.full_name,
-              role: row.role,
-              isActive: row.is_active,
-              lastLoginAt: row.last_login_at,
-              createdAt: row.created_at,
-              createdBy: row.created_by,
-            },
-          ]
-        : []
-    );
+    return rows.map((row) => ({
+      id: row.id,
+      email: row.email,
+      name: row.full_name,
+      role: row.role,
+      isActive: row.is_active,
+      lastLoginAt: row.last_login_at,
+      createdAt: row.created_at,
+      createdBy: row.created_by,
+    }));
   }
 );
 

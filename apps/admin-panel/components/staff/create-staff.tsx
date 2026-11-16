@@ -1,22 +1,29 @@
 'use client';
 
-import { useActionState } from 'react';
+import { useActionState, useState } from 'react';
 
 import { SecretReveal } from '@/components/staff/secret-reveal';
 import { Field, FormMessage, Input, Select } from '@/components/ui/form';
 import { SubmitButton } from '@/components/ui/submit-button';
 import { createStaff, type StaffActionState } from '@/lib/actions/staff';
-import { ROLE_LABEL, STAFF_ROLES } from '@/lib/staff/roles';
+
+export type RoleOption = { key: string; name: string; description: string };
 
 /**
- * Add a staff member. No password field: one is generated and shown once,
- * because a typed one is how `Welcome123` reaches production.
+ * Add a user. The role is chosen from the roles built in Settings → Roles,
+ * and its description is shown so the choice is informed. No password field:
+ * one is generated and shown once, because a typed one is how `Welcome123`
+ * reaches production.
  */
-export function CreateStaff() {
+export function CreateStaff({ roles }: { roles: RoleOption[] }) {
   const [state, formAction] = useActionState<StaffActionState, FormData>(
     createStaff,
     {}
   );
+  const [roleKey, setRoleKey] = useState(
+    roles.find((r) => r.key === 'support_l1')?.key ?? roles[0]?.key ?? ''
+  );
+  const selected = roles.find((r) => r.key === roleKey);
 
   return (
     <div className="space-y-4">
@@ -38,20 +45,25 @@ export function CreateStaff() {
         </div>
         <Field
           label="Role"
-          hint="What each role can do is in the matrix below. Start narrow — a role can be widened later in one click."
+          hint={
+            selected?.description ||
+            'Roles decide which modules this person can open.'
+          }
         >
-          <Select name="role" defaultValue="support_l1">
-            {STAFF_ROLES.map((role) => (
-              <option key={role} value={role}>
-                {ROLE_LABEL[role]}
+          <Select
+            name="role"
+            value={roleKey}
+            onChange={(event) => setRoleKey(event.target.value)}
+          >
+            {roles.map((role) => (
+              <option key={role.key} value={role.key}>
+                {role.name}
               </option>
             ))}
           </Select>
         </Field>
         <FormMessage ok={state.ok} error={state.error} />
-        <SubmitButton pendingLabel="Creating…">
-          Create staff account
-        </SubmitButton>
+        <SubmitButton pendingLabel="Creating…">Create user</SubmitButton>
       </form>
       {state.secret ? (
         <SecretReveal secret={state.secret} owner={state.secretFor} />

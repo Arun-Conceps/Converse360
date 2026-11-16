@@ -49,7 +49,7 @@ export default async function NoAccessPage({
           </h1>
           <p className="text-muted text-sm leading-relaxed">
             You are signed in as{' '}
-            <strong className="text-ink-2">{ROLE_LABEL[staff.role]}</strong>.
+            <strong className="text-ink-2">{staff.roleLabel}</strong>.
             {holders.length > 0 ? (
               <>
                 {' '}

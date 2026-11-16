@@ -157,3 +157,136 @@ export function isStaffRole(value: unknown): value is StaffRole {
 export function roleCan(role: StaffRole, capability: Capability): boolean {
   return ROLE_CAPABILITIES[role].has(capability);
 }
+
+/* ============================================================
+ * Custom roles (migration 101).
+ *
+ * A Super Admin builds a role by ticking permissions, grouped into modules.
+ * The six built-in roles above stay defined in code; a custom role stores the
+ * capability names it was given and nothing else.
+ * ============================================================ */
+
+/** Every capability, in one stable order. */
+export const ALL_CAPABILITIES: readonly Capability[] = ALL;
+
+export function isCapability(value: unknown): value is Capability {
+  return (
+    typeof value === 'string' && (ALL as readonly string[]).includes(value)
+  );
+}
+
+export const CAPABILITY_LABEL: Record<Capability, string> = {
+  'clients.read': 'View clients, health and onboarding',
+  'clients.notes': 'Write notes and tasks on a client',
+  'clients.manage': 'Assign owners, lifecycle and service tier',
+  'members.manage': 'Manage workspace members and invitations',
+  export: 'Export client and portfolio data (CSV)',
+  'tickets.work': 'View and work support tickets',
+  'billing.read': 'See subscriptions, plans and revenue',
+  'billing.manage': 'Edit subscriptions, plans and credit packs',
+  'credits.adjust': 'Adjust AI credits',
+  'integrations.read': 'See API keys, webhooks and integration diagnostics',
+  'catalog.read_mapping': 'See which model sits behind each AI alias',
+  'catalog.manage': 'Edit the AI catalog',
+  'staff.manage': 'Create users and roles',
+  'settings.manage': 'Change SLA targets and thresholds',
+  'audit.read': 'Read the audit log',
+};
+
+export type ModuleDef = {
+  key: string;
+  label: string;
+  description: string;
+  capabilities: readonly Capability[];
+};
+
+/** The modules shown when building a role. Every capability appears once. */
+export const MODULES: readonly ModuleDef[] = [
+  {
+    key: 'clients',
+    label: 'Clients',
+    description: 'The client directory, Customer 360, health and onboarding.',
+    capabilities: [
+      'clients.read',
+      'clients.notes',
+      'clients.manage',
+      'members.manage',
+      'export',
+    ],
+  },
+  {
+    key: 'support',
+    label: 'Support desk',
+    description: 'Tickets, SLAs and the support queue.',
+    capabilities: ['tickets.work'],
+  },
+  {
+    key: 'billing',
+    label: 'Billing & revenue',
+    description: 'Subscriptions, plans, renewals and AI credits.',
+    capabilities: ['billing.read', 'billing.manage', 'credits.adjust'],
+  },
+  {
+    key: 'integrations',
+    label: 'Integrations & API',
+    description: 'API keys, webhooks and store or Google connections.',
+    capabilities: ['integrations.read'],
+  },
+  {
+    key: 'catalog',
+    label: 'AI catalog',
+    description: 'The Converse AI models and their internal mapping.',
+    capabilities: ['catalog.read_mapping', 'catalog.manage'],
+  },
+  {
+    key: 'settings',
+    label: 'Settings & access',
+    description: 'Users, roles, thresholds and the audit log.',
+    capabilities: ['staff.manage', 'settings.manage', 'audit.read'],
+  },
+];
+
+/** Permissions that only make sense together with another. */
+const IMPLIES: Partial<Record<Capability, readonly Capability[]>> = {
+  'clients.notes': ['clients.read'],
+  'clients.manage': ['clients.read'],
+  'members.manage': ['clients.read'],
+  export: ['clients.read'],
+  'billing.manage': ['billing.read'],
+  'credits.adjust': ['billing.read'],
+  'catalog.manage': ['catalog.read_mapping'],
+};
+
+/**
+ * Turns whatever was submitted into a valid capability list: unknown names
+ * dropped, implied ones added ("edit billing" brings "see billing"), and
+ * `clients.read` always present — every staff member lands on the Overview,
+ * which needs it, so a role without it would sign people into a no-access page.
+ * Returned in the stable ALL order, so equal sets compare equal.
+ */
+export function normaliseCapabilities(input: readonly unknown[]): Capability[] {
+  const set = new Set<Capability>(['clients.read']);
+  for (const value of input) {
+    if (!isCapability(value)) continue;
+    set.add(value);
+    for (const needed of IMPLIES[value] ?? []) set.add(needed);
+  }
+  return ALL.filter((capability) => set.has(capability));
+}
+
+/** Every capability that needs `capability` — unticking it must untick these. */
+export function capabilitiesRequiring(capability: Capability): Capability[] {
+  return ALL.filter((other) => IMPLIES[other]?.includes(capability));
+}
+
+/** A role key for a custom role, from its name. Never one of the built-ins. */
+export function roleKeyFromName(name: string): string {
+  const base = name
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 30);
+  const key = /^[a-z]/.test(base) && base.length >= 2 ? base : `role_${base}`;
+  return isStaffRole(key) ? `custom_${key}` : key;
+}

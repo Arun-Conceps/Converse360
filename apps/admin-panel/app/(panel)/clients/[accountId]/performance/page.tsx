@@ -127,7 +127,7 @@ export default async function ClientPerformancePage({
             type="submit"
             className={`rounded-lg border px-3 py-2 text-xs font-semibold ${
               window.key === 'custom'
-                ? 'bg-primary border-transparent text-white'
+                ? 'bg-primary border-transparent text-on-primary'
                 : 'border-ring bg-surface text-ink hover:bg-surface-2'
             }`}
           >

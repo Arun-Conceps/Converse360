@@ -19,7 +19,7 @@ import {
   hashPassword,
   verifyPassword,
 } from '@/lib/staff/password';
-import { ROLE_LABEL, STAFF_ROLES, type StaffRole } from '@/lib/staff/roles';
+import { canGrant, getRole, type RoleDef } from '@/lib/staff/role-store';
 
 /**
  * Staff & Access writes (Super Admin — `staff.manage`), plus changing your own
@@ -74,6 +74,28 @@ function toState(error: unknown, what: string): StaffActionState {
   return { error: 'Could not save that change. Check the logs.' };
 }
 
+/**
+ * The role named by the form, if it exists and `staff` may grant it. Role keys
+ * come from the browser, so this is the check — not the dropdown.
+ */
+async function grantableRole(
+  staff: Staff,
+  formData: FormData
+): Promise<RoleDef> {
+  const key = formData.get('role');
+  if (typeof key !== 'string' || !key) {
+    throw new FieldError('Choose a role.');
+  }
+  const role = await getRole(key);
+  if (!role) throw new FieldError('That role no longer exists.');
+  if (!canGrant(staff, role)) {
+    throw new FieldError(
+      'You cannot give a role with permissions you do not have yourself.'
+    );
+  }
+  return role;
+}
+
 async function activeSuperAdmins(excludingId?: string): Promise<number> {
   return prisma.admin_staff.count({
     where: {
@@ -101,7 +123,7 @@ export async function createStaff(
     if (fullName.length > 80) {
       throw new FieldError('Name must be 80 characters or fewer.');
     }
-    const role = oneOf(formData, 'role', STAFF_ROLES, { label: 'Role' })!;
+    const role = await grantableRole(staff, formData);
 
     const existing = await prisma.admin_staff.findUnique({
       where: { email },
@@ -116,7 +138,7 @@ export async function createStaff(
       data: {
         email,
         full_name: fullName,
-        role,
+        role: role.key,
         password_hash: await hashPassword(temporary),
         created_by: staff.actor,
       },
@@ -128,8 +150,8 @@ export async function createStaff(
       action: 'staff.create',
       targetType: 'staff',
       targetId: created.id,
-      summary: `Created staff account ${email} as ${ROLE_LABEL[role]}.`,
-      detail: { email, fullName, role },
+      summary: `Created staff account ${email} as ${role.name}.`,
+      detail: { email, fullName, role: role.key },
     });
 
     refresh();
@@ -188,14 +210,23 @@ async function setRole(
   target: Target,
   isSelf: boolean
 ): Promise<StaffActionState> {
-  const role = oneOf(formData, 'role', STAFF_ROLES, { label: 'Role' })!;
+  const role = await grantableRole(staff, formData);
   if (isSelf) {
     throw new FieldError(
       'You cannot change your own role. Ask another Super Admin.'
     );
   }
-  if (role === target.role) {
-    throw new FieldError(`They are already ${ROLE_LABEL[role]}.`);
+  if (role.key === target.role) {
+    throw new FieldError(`They are already ${role.name}.`);
+  }
+  // Taking a role away from somebody who holds more than you could also lock
+  // them out of work you may not undo, so a non-Super-Admin may only change
+  // roles they could themselves grant.
+  const current = await getRole(target.role);
+  if (current && !canGrant(staff, current)) {
+    throw new FieldError(
+      'They hold permissions you do not have, so only a Super Admin can change their role.'
+    );
   }
   if (
     target.role === 'super_admin' &&
@@ -210,25 +241,25 @@ async function setRole(
   await prisma.admin_staff.update({
     where: { id: target.id },
     data: {
-      role,
+      role: role.key,
       session_version: { increment: 1 },
       updated_at: new Date(),
     },
   });
 
-  const from = ROLE_LABEL[target.role as StaffRole] ?? target.role;
+  const from = current?.name ?? target.role;
   await recordAudit({
     actor: staff.actor,
     action: 'staff.role',
     targetType: 'staff',
     targetId: target.id,
-    summary: `Changed ${target.email} from ${from} to ${ROLE_LABEL[role]}; their sessions were signed out.`,
-    detail: { email: target.email, from: target.role, to: role },
+    summary: `Changed ${target.email} from ${from} to ${role.name}; their sessions were signed out.`,
+    detail: { email: target.email, from: target.role, to: role.key },
   });
 
   refresh();
   return {
-    ok: `${target.email} is now ${ROLE_LABEL[role]}. They will be asked to sign in again.`,
+    ok: `${target.email} is now ${role.name}. They will be asked to sign in again.`,
   };
 }
 

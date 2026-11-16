@@ -1,3 +1,15 @@
+import {
+  CalendarClock,
+  CircleAlert,
+  FlaskConical,
+  Hourglass,
+  LifeBuoy,
+  ShieldAlert,
+  Sparkles,
+  TrendingUp,
+  TriangleAlert,
+  Wallet,
+} from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
@@ -183,7 +195,7 @@ export default async function OverviewPage() {
       <PageHeader
         eyebrow="Operations"
         title="Overview"
-        description="What needs a person right now, across every client — incidents, tickets, onboarding, renewals and credits."
+        description="What needs a person right now."
         actions={
           worksTickets ? (
             <ButtonLink href="/support/new" variant="primary">
@@ -199,21 +211,22 @@ export default async function OverviewPage() {
           {roster.length === 1 ? '' : 's'}
         </span>
         <span aria-hidden>·</span>
-        <span>Health evaluated {formatDateTime(evaluatedAt)}</span>
+        <span>Updated {formatDateTime(evaluatedAt)}</span>
         <span aria-hidden>·</span>
-        <span>Times in {adminTimezone()}</span>
-        <span aria-hidden>·</span>
-        <span>Health is judged from stored evidence, not live probes</span>
+        <span>{adminTimezone()}</span>
       </ScopeLine>
 
       <StatRow columns={6}>
         <StatTile
           label="Critical incidents"
           value={formatNumber(critical.length)}
+          icon={ShieldAlert}
           context={
             critical.length > 0
-              ? `${formatNumber(criticalClients)} client${criticalClients === 1 ? '' : 's'} · ${formatNumber(attentionChecks)} more need attention`
-              : `${formatNumber(attentionChecks)} check${attentionChecks === 1 ? '' : 's'} need attention`
+              ? `${formatNumber(criticalClients)} client${criticalClients === 1 ? '' : 's'} affected`
+              : attentionChecks > 0
+                ? `${formatNumber(attentionChecks)} to review`
+                : 'All clear'
           }
           tone={critical.length > 0 ? 'critical' : 'good'}
           href="/incidents"
@@ -221,14 +234,16 @@ export default async function OverviewPage() {
         <StatTile
           label="Needs attention"
           value={formatNumber(needsAttention.length)}
-          context="Live clients with a critical check or a failed payment"
+          icon={TriangleAlert}
+          context="Clients at risk"
           tone={needsAttention.length > 0 ? 'warning' : 'neutral'}
           href="/clients?stage=attention"
         />
         <StatTile
           label="Stalled onboarding"
           value={formatNumber(stalled.length)}
-          context={`Onboarding for ${settings.stalledOnboardingDays}+ days`}
+          icon={Hourglass}
+          context={`${settings.stalledOnboardingDays}+ days in onboarding`}
           tone={stalled.length > 0 ? 'warning' : 'neutral'}
           href="/onboarding"
         />
@@ -236,7 +251,8 @@ export default async function OverviewPage() {
           <StatTile
             label="Open tickets"
             value={formatNumber(tickets.length)}
-            context={`${formatNumber(breached.length)} breaching SLA · ${formatNumber(unassigned.length)} unassigned`}
+            icon={LifeBuoy}
+            context={`${formatNumber(breached.length)} late · ${formatNumber(unassigned.length)} unassigned`}
             tone={
               breached.length > 0
                 ? 'critical'
@@ -250,7 +266,8 @@ export default async function OverviewPage() {
         <StatTile
           label="Renewals due"
           value={formatNumber(renewals.length)}
-          context={`Period ends within ${settings.renewalWindowDays} days`}
+          icon={CalendarClock}
+          context={`Next ${settings.renewalWindowDays} days`}
           href={
             money
               ? `/subscriptions/renewals?days=${settings.renewalWindowDays}`
@@ -260,10 +277,11 @@ export default async function OverviewPage() {
         <StatTile
           label="Low AI credits"
           value={formatNumber(lowCredits.length)}
+          icon={Sparkles}
           context={
             emptyWithAutoReply.length > 0
-              ? `${formatNumber(emptyWithAutoReply.length)} empty with auto-reply on — bot silent`
-              : `At or below ${formatCredits(settings.lowCreditThreshold)} credits, agent on`
+              ? `${formatNumber(emptyWithAutoReply.length)} empty, bot silent`
+              : `${formatCredits(settings.lowCreditThreshold)} credits or less`
           }
           tone={
             emptyWithAutoReply.length > 0
@@ -293,33 +311,34 @@ export default async function OverviewPage() {
           />
           <div className="grid grid-cols-2 gap-x-6 gap-y-5 px-5 py-4 md:grid-cols-4">
             <MiniStat
+              icon={Wallet}
               label="MRR"
               value={formatMoney(revenue.subscriptions.mrr)}
               hint={`${formatNumber(revenue.subscriptions.paying)} paying`}
             />
             <MiniStat
+              icon={TrendingUp}
               label="ARR"
               value={formatMoney(revenue.subscriptions.mrr * 12)}
               hint="MRR × 12"
             />
             <MiniStat
-              label="At risk (past due)"
+              icon={CircleAlert}
+              label="At risk"
               value={formatMoney(revenue.subscriptions.atRiskMrr)}
-              hint={`${formatNumber(revenue.subscriptions.pastDue)} in dunning, still entitled`}
+              hint={`${formatNumber(revenue.subscriptions.pastDue)} past due`}
             />
             <MiniStat
+              icon={FlaskConical}
               label="Trial pipeline"
               value={formatMoney(revenue.subscriptions.trialMrr)}
-              hint={`${formatNumber(revenue.subscriptions.trial)} on trial, per month if they convert`}
+              hint={`${formatNumber(revenue.subscriptions.trial)} on trial`}
             />
           </div>
           <div className="px-5 pb-4">
-            <DerivedNote>
-              Derived from plan prices, not payments — this database keeps no
-              invoice record, so these are what the current subscriptions are
-              worth, not what was collected. MRR counts active subscriptions
-              only.
-            </DerivedNote>
+            {/* Kept short but never dropped: there is no invoice record, so
+                these are plan price × subscription, not money collected. */}
+            <DerivedNote>Derived from plan prices, not payments.</DerivedNote>
           </div>
         </Card>
       ) : null}
@@ -328,7 +347,6 @@ export default async function OverviewPage() {
         <CardHeader
           eyebrow="My work"
           title={`Assigned to ${staff.isBreakGlass ? 'you' : staff.name}`}
-          description="Tickets you own, follow-ups you were given, and the clients you manage that are not healthy."
         />
         {staff.id === null ? (
           <div className="px-5 py-4">

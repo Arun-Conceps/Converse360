@@ -27,7 +27,7 @@ export function SubmitButton({
   const { pending } = useFormStatus();
 
   const styles = {
-    primary: 'bg-primary text-white hover:bg-primary-hover',
+    primary: 'bg-primary text-on-primary hover:bg-primary-hover',
     secondary: 'border-ring bg-surface border text-ink hover:bg-surface-2',
     danger: 'border-bad-fg/40 bg-surface text-bad-fg border hover:bg-bad-soft',
     ghost: 'text-ink-2 hover:bg-surface-2',

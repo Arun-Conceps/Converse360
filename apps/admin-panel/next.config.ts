@@ -14,8 +14,13 @@ const SECURITY_HEADERS = [
     key: 'Content-Security-Policy',
     value: [
       "default-src 'self'",
-      // Next injects inline bootstrap and RSC payload scripts.
-      "script-src 'self' 'unsafe-inline'",
+      // Next injects inline bootstrap and RSC payload scripts. React's dev
+      // build also needs eval() to rebuild call stacks; that is development
+      // only ("React will never use eval() in production mode"), so
+      // production keeps the strict policy.
+      process.env.NODE_ENV === 'development'
+        ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+        : "script-src 'self' 'unsafe-inline'",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data:",
       "font-src 'self' data:",

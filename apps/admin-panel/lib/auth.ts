@@ -14,12 +14,8 @@ import {
   verifySessionToken,
 } from '@/lib/session';
 import { decoyHash, verifyPassword } from '@/lib/staff/password';
-import {
-  isStaffRole,
-  roleCan,
-  type Capability,
-  type StaffRole,
-} from '@/lib/staff/roles';
+import { getRole } from '@/lib/staff/role-store';
+import { ROLE_CAPABILITIES, type Capability } from '@/lib/staff/roles';
 
 /**
  * The panel's data access layer for auth.
@@ -47,7 +43,11 @@ export type Staff = {
   id: string | null;
   email: string;
   name: string;
-  role: StaffRole;
+  /** Role key: one of the six built-ins or a custom role (migration 101). */
+  role: string;
+  roleLabel: string;
+  /** What this role may do. Read through `can()`, never directly. */
+  capabilities: ReadonlySet<Capability>;
   isBreakGlass: boolean;
   /** Unix seconds. */
   sessionExpiresAt: number;
@@ -70,7 +70,7 @@ function breakGlassConfigured(): boolean {
 }
 
 export type LoginResult =
-  | { ok: true; subject: string; role: StaffRole; version: number }
+  | { ok: true; subject: string; role: string; version: number }
   | { ok: false };
 
 /**
@@ -93,7 +93,14 @@ export async function checkCredentials(
   const hash = staff?.password_hash ?? (await decoyHash());
   const passwordMatches = await verifyPassword(password, hash);
 
-  if (staff && staff.is_active && passwordMatches && isStaffRole(staff.role)) {
+  // A role that no longer exists signs nobody in rather than granting nothing
+  // quietly. (The foreign key makes this unreachable; the check is cheap.)
+  if (
+    staff &&
+    staff.is_active &&
+    passwordMatches &&
+    (await getRole(staff.role)) !== null
+  ) {
     await prisma.admin_staff.update({
       where: { id: staff.id },
       data: { last_login_at: new Date() },
@@ -124,7 +131,7 @@ export async function checkCredentials(
 
 export async function startSession(input: {
   subject: string;
-  role: StaffRole;
+  role: string;
   version: number;
 }): Promise<void> {
   const { token, expiresAt } = await signSession(input);
@@ -172,6 +179,8 @@ export const getStaff = cache(async (): Promise<Staff | null> => {
       email: username,
       name: 'Break-glass admin',
       role: 'super_admin',
+      roleLabel: 'Super Admin',
+      capabilities: ROLE_CAPABILITIES.super_admin,
       isBreakGlass: true,
       sessionExpiresAt: session.expiresAt,
       actor: `${username} (break-glass)`,
@@ -181,20 +190,21 @@ export const getStaff = cache(async (): Promise<Staff | null> => {
   const row = await prisma.admin_staff.findUnique({
     where: { id: session.subject },
   });
-  if (
-    !row ||
-    !row.is_active ||
-    row.session_version !== session.version ||
-    !isStaffRole(row.role)
-  ) {
+  if (!row || !row.is_active || row.session_version !== session.version) {
     return null;
   }
+  // Capabilities come from the role row on every request, so editing a role
+  // applies to everyone who holds it on their next click.
+  const role = await getRole(row.role);
+  if (!role) return null;
 
   return {
     id: row.id,
     email: row.email,
     name: row.full_name,
-    role: row.role,
+    role: role.key,
+    roleLabel: role.name,
+    capabilities: role.capabilities,
     isBreakGlass: false,
     sessionExpiresAt: session.expiresAt,
     actor: row.email,
@@ -208,7 +218,7 @@ export async function requireStaff(): Promise<Staff> {
 }
 
 export function can(staff: Staff, capability: Capability): boolean {
-  return roleCan(staff.role, capability);
+  return staff.capabilities.has(capability);
 }
 
 /**

@@ -1,7 +1,6 @@
 import { SignJWT, jwtVerify } from 'jose';
 
 import { sessionSecret, sessionTtlHours } from '@/lib/env';
-import { isStaffRole, type StaffRole } from '@/lib/staff/roles';
 
 /**
  * Session token plumbing — signing and verifying only, no cookie access and
@@ -22,8 +21,8 @@ export const BREAK_GLASS_SUBJECT = 'env';
 export type AdminSession = {
   /** `admin_staff.id`, or BREAK_GLASS_SUBJECT for the env credential. */
   subject: string;
-  /** Role at the time the token was minted. Re-read from the row on use. */
-  role: StaffRole;
+  /** Role key at the time the token was minted. Re-read from the row on use. */
+  role: string;
   /** `admin_staff.session_version` the token was minted under. */
   version: number;
   /** Unix seconds. Mirrors the JWT `exp` claim for convenient display. */
@@ -32,7 +31,7 @@ export type AdminSession = {
 
 export async function signSession(input: {
   subject: string;
-  role: StaffRole;
+  role: string;
   version: number;
 }): Promise<{ token: string; expiresAt: Date }> {
   const expiresAt = new Date(Date.now() + sessionTtlHours() * 60 * 60 * 1000);
@@ -64,7 +63,8 @@ export async function verifySessionToken(
 
     if (
       typeof payload.sub !== 'string' ||
-      !isStaffRole(payload.role) ||
+      typeof payload.role !== 'string' ||
+      !payload.role ||
       typeof payload.ver !== 'number' ||
       !payload.exp
     ) {

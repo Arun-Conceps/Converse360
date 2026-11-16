@@ -1,20 +1,22 @@
-import { KeyRound, LogOut, Search } from 'lucide-react';
+import { Bell, Search } from 'lucide-react';
+import Image from 'next/image';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
 import { MobileNav } from '@/components/shell/mobile-nav';
 import { Nav } from '@/components/shell/nav';
+import { ProfileMenu } from '@/components/shell/profile-menu';
+import { ThemeToggle } from '@/components/shell/theme-toggle';
 import { logout } from '@/lib/actions/auth';
 import { can, requireStaff } from '@/lib/auth';
-import { adminTimezone, currency } from '@/lib/env';
 import { initialsOf } from '@/lib/format';
 import { NAV } from '@/lib/nav';
 import { prisma } from '@/lib/prisma';
-import { ROLE_LABEL } from '@/lib/staff/roles';
 
 /**
- * The authenticated shell: navy rail, top bar with global client search and
- * the signed-in staff member, and the page.
+ * The authenticated shell: a left sidebar with main menus that open into
+ * sub-menus, a slim top bar (client search, theme toggle, the signed-in staff
+ * member) and the page. Below `lg` the sidebar becomes a drawer.
  *
  * `requireStaff()` here protects the render and nothing else — each page and
  * every Server Action checks its own capability again.
@@ -30,7 +32,7 @@ export default async function PanelLayout({
     .filter((item) => can(staff, item.capability))
     .map((item) => item.href);
 
-  // One cheap, indexed count for the rail: open tickets nobody owns. The
+  // One cheap, indexed count for the menu: open tickets nobody owns. The
   // fleet health scan is deliberately NOT run here — it would cost every
   // page load a pass over every workspace.
   const unassigned = can(staff, 'tickets.work')
@@ -43,27 +45,52 @@ export default async function PanelLayout({
     : 0;
 
   const brand = (
-    <Link href="/" className="block px-1">
-      <span className="text-rail-ink-strong text-[19px] font-extrabold tracking-tight">
-        Converse<span className="text-[#80abed]">360</span>
-      </span>
-      <span className="text-rail-muted block text-[10px] font-semibold tracking-[0.16em] uppercase">
-        Control Center
-      </span>
+    <Link
+      href="/"
+      className="flex items-center gap-2 px-1"
+      aria-label="Converse360 admin"
+    >
+      <Image
+        src="/brand/converse360-wordmark.svg"
+        alt=""
+        width={768}
+        height={120}
+        unoptimized
+        className="h-5 w-auto [html[data-mode=dark]_&]:hidden"
+      />
+      <Image
+        src="/brand/converse360-wordmark-dark.svg"
+        alt=""
+        width={768}
+        height={120}
+        unoptimized
+        className="hidden h-5 w-auto [html[data-mode=dark]_&]:block"
+      />
     </Link>
   );
 
-  const nav = <Nav allowed={allowed} badges={{ '/support': unassigned }} />;
+  const badges = { '/support': unassigned };
 
   return (
-    <div className="min-h-dvh lg:pl-[248px]">
-      <aside className="rail bg-rail fixed inset-y-0 left-0 z-30 hidden w-[248px] flex-col lg:flex">
+    <div className="min-h-dvh lg:pl-[256px]">
+      <aside className="rail bg-rail border-line fixed inset-y-0 left-0 z-30 hidden w-[256px] flex-col border-r lg:flex">
         <div className="px-5 pt-5 pb-4">{brand}</div>
         <div className="rail-scroll flex-1 overflow-y-auto px-3 pb-4">
-          {nav}
+          <Nav allowed={allowed} badges={badges} />
         </div>
-        <div className="border-rail-2 text-rail-muted border-t px-5 py-4 text-[11px] leading-relaxed">
-          Amounts in {currency()} · Times in {adminTimezone()}
+        <div className="border-line border-t p-3">
+          <ProfileMenu
+            variant="rail"
+            name={staff.name}
+            email={staff.email}
+            roleLabel={staff.roleLabel}
+            initials={initialsOf(staff.name, staff.email)}
+            isBreakGlass={staff.isBreakGlass}
+            signOut={logout}
+          />
+          <p className="text-rail-muted mt-2 text-center text-[10.5px]">
+            Converse360 Control Center
+          </p>
         </div>
       </aside>
 
@@ -71,7 +98,7 @@ export default async function PanelLayout({
         <header className="border-line bg-surface/90 sticky top-0 z-20 border-b backdrop-blur">
           <div className="mx-auto flex h-16 w-full max-w-[1500px] items-center gap-3 px-4 lg:px-8">
             <MobileNav brand={brand}>
-              <Nav allowed={allowed} badges={{ '/support': unassigned }} />
+              <Nav allowed={allowed} badges={badges} />
             </MobileNav>
 
             <form
@@ -96,57 +123,36 @@ export default async function PanelLayout({
               />
             </form>
 
-            <div className="ml-auto flex items-center gap-2">
-              <details className="group relative">
-                <summary className="hover:bg-surface-2 flex cursor-pointer list-none items-center gap-2.5 rounded-lg px-2 py-1.5 [&::-webkit-details-marker]:hidden">
-                  <span
-                    aria-hidden
-                    className="bg-primary-soft text-primary-soft-ink grid size-8 place-items-center rounded-full text-xs font-bold"
-                  >
-                    {initialsOf(staff.name, staff.email)}
-                  </span>
-                  <span className="hidden text-left sm:block">
-                    <span className="text-ink block max-w-40 truncate text-[13px] leading-tight font-semibold">
-                      {staff.name}
+            <div className="ml-auto flex items-center gap-1.5">
+              {allowed.includes('/support') ? (
+                <Link
+                  href="/support"
+                  aria-label={
+                    unassigned > 0
+                      ? `${unassigned} unassigned support tickets`
+                      : 'Support tickets'
+                  }
+                  className="text-ink-2 hover:bg-surface-2 hover:text-ink relative grid size-9 place-items-center rounded-lg transition-colors"
+                >
+                  <Bell aria-hidden className="size-[18px]" />
+                  {unassigned > 0 ? (
+                    <span className="bg-critical absolute -top-0.5 -right-0.5 rounded-full px-1 text-[10px] leading-4 font-bold text-white">
+                      {unassigned > 99 ? '99+' : unassigned}
                     </span>
-                    <span className="text-muted block text-[11px] leading-tight">
-                      {ROLE_LABEL[staff.role]}
-                    </span>
-                  </span>
-                </summary>
-                <div className="border-ring bg-surface shadow-pop absolute right-0 mt-2 w-64 rounded-xl border p-2">
-                  <div className="border-line border-b px-2.5 pt-1.5 pb-2.5">
-                    <p className="text-ink truncate text-sm font-semibold">
-                      {staff.name}
-                    </p>
-                    <p className="text-muted truncate text-xs">{staff.email}</p>
-                    {staff.isBreakGlass ? (
-                      <p className="bg-warn-soft text-warn-fg mt-2 rounded-md px-2 py-1 text-[11px] leading-snug">
-                        Break-glass login. Create a staff account for day-to-day
-                        use.
-                      </p>
-                    ) : null}
-                  </div>
-                  {staff.isBreakGlass ? null : (
-                    <Link
-                      href="/account"
-                      className="text-ink-2 hover:bg-surface-2 mt-1 flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm"
-                    >
-                      <KeyRound aria-hidden className="size-4" />
-                      Change password
-                    </Link>
-                  )}
-                  <form action={logout}>
-                    <button
-                      type="submit"
-                      className="text-ink-2 hover:bg-surface-2 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm"
-                    >
-                      <LogOut aria-hidden className="size-4" />
-                      Sign out
-                    </button>
-                  </form>
-                </div>
-              </details>
+                  ) : null}
+                </Link>
+              ) : null}
+              <ThemeToggle />
+              <div>
+                <ProfileMenu
+                  name={staff.name}
+                  email={staff.email}
+                  roleLabel={staff.roleLabel}
+                  initials={initialsOf(staff.name, staff.email)}
+                  isBreakGlass={staff.isBreakGlass}
+                  signOut={logout}
+                />
+              </div>
             </div>
           </div>
         </header>

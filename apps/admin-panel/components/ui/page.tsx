@@ -1,3 +1,4 @@
+import type { LucideIcon } from 'lucide-react';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
@@ -55,7 +56,7 @@ export function PageHeader({
 }
 
 const BUTTON_STYLE = {
-  primary: 'bg-primary text-white hover:bg-primary-hover border-transparent',
+  primary: 'bg-primary text-on-primary hover:bg-primary-hover border-transparent',
   secondary: 'bg-surface text-ink border-ring hover:bg-surface-2',
   ghost: 'text-ink-2 border-transparent hover:bg-surface-2',
 } as const;
@@ -145,7 +146,7 @@ export function Segmented({
             href={option.href}
             aria-current={on ? 'true' : undefined}
             className={`rounded-md px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition ${
-              on ? 'bg-primary text-white' : 'text-ink-2 hover:bg-surface-2'
+              on ? 'bg-primary text-on-primary' : 'text-ink-2 hover:bg-surface-2'
             }`}
           >
             {option.label}
@@ -161,16 +162,31 @@ export function MiniStat({
   label,
   value,
   hint,
+  icon: Icon,
 }: {
   label: string;
   value: ReactNode;
   hint?: ReactNode;
+  /** Optional lucide icon in a soft chip beside the label. */
+  icon?: LucideIcon;
 }) {
   return (
-    <div className="min-w-0">
-      <p className="text-muted text-xs">{label}</p>
-      <p className="text-ink tabular mt-0.5 truncate font-semibold">{value}</p>
-      {hint ? <p className="text-muted mt-0.5 text-xs">{hint}</p> : null}
+    <div className="flex min-w-0 items-start gap-3">
+      {Icon ? (
+        <span
+          aria-hidden
+          className="bg-primary-soft text-primary-soft-ink grid size-9 shrink-0 place-items-center rounded-xl"
+        >
+          <Icon className="size-[18px]" strokeWidth={2} />
+        </span>
+      ) : null}
+      <div className="min-w-0">
+        <p className="text-muted text-xs">{label}</p>
+        <p className="text-ink tabular mt-0.5 truncate font-semibold">
+          {value}
+        </p>
+        {hint ? <p className="text-muted mt-0.5 text-xs">{hint}</p> : null}
+      </div>
     </div>
   );
 }

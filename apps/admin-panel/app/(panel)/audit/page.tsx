@@ -114,7 +114,7 @@ export default async function AuditPage({
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Platform"
+        eyebrow="Settings"
         title="Audit Logs"
         description="Every write the Control Center has made, by whom, in the words recorded at the time. Immutable: nothing here can be edited or deleted."
         actions={

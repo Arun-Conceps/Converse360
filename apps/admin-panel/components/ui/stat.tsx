@@ -1,3 +1,4 @@
+import type { LucideIcon } from 'lucide-react';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
@@ -91,6 +92,15 @@ function DeltaLine({ delta }: { delta: StatDelta }) {
   );
 }
 
+/** Icon chip colours per tone. The chip is decoration; the tone marker dot and
+ * the context text still carry the status for anyone who can't see colour. */
+const CHIP: Record<StatTone, string> = {
+  neutral: 'bg-primary-soft text-primary-soft-ink',
+  good: 'bg-good-soft text-good-fg',
+  warning: 'bg-warn-soft text-warn-fg',
+  critical: 'bg-bad-soft text-bad-fg',
+};
+
 export function StatTile({
   label,
   value,
@@ -98,6 +108,7 @@ export function StatTile({
   tone = 'neutral',
   href,
   delta,
+  icon: Icon,
 }: {
   label: string;
   value: string;
@@ -106,12 +117,24 @@ export function StatTile({
   /** Makes the whole tile a link to the list behind the number. */
   href?: string;
   delta?: StatDelta;
+  /** Optional lucide icon, shown in a tinted chip at the top right. */
+  icon?: LucideIcon;
 }) {
   const body = (
     <>
-      <p className="text-muted text-[11px] font-semibold tracking-wider uppercase">
-        {label}
-      </p>
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-muted text-[11px] font-semibold tracking-wider uppercase">
+          {label}
+        </p>
+        {Icon ? (
+          <span
+            aria-hidden
+            className={`grid size-8 shrink-0 place-items-center rounded-xl ${CHIP[tone]}`}
+          >
+            <Icon className="size-4" strokeWidth={2} />
+          </span>
+        ) : null}
+      </div>
       {/* Tone is a marker beside the value, never the value's colour — a
        * status hue as text either fails contrast or impersonates a series. */}
       <p className="text-ink mt-2 flex items-center gap-2 text-[26px] leading-none font-bold tracking-tight">

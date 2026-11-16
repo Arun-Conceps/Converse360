@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState } from 'react';
+import { useActionState, useEffect } from 'react';
 
 import {
   Checkbox,
@@ -12,50 +12,62 @@ import {
 } from '@/components/ui/form';
 import { Callout } from '@/components/ui/page';
 import { SubmitButton } from '@/components/ui/submit-button';
-import { updatePlan } from '@/lib/actions/plans';
+import { createPlan, updatePlan } from '@/lib/actions/plans';
 import type { ActionState } from '@/lib/actions/subscriptions';
 
+/**
+ * Edit a plan (`planId` given) or create one (no `planId`). A new plan also
+ * asks for its permanent key.
+ */
 export function PlanForm({
   planId,
-  displayName,
-  description,
-  priceMonthly,
-  priceYearly,
-  trialDays,
-  maxContacts,
-  maxMessagesMonthly,
-  maxBroadcastsMonthly,
-  maxFlows,
-  maxTeamMembers,
-  maxStorageMb,
-  isActive,
-  activeSubscribers,
+  displayName = '',
+  description = null,
+  priceMonthly = 0,
+  priceYearly = 0,
+  trialDays = null,
+  maxContacts = 0,
+  maxMessagesMonthly = 0,
+  maxBroadcastsMonthly = 0,
+  maxFlows = null,
+  maxTeamMembers = 1,
+  maxStorageMb = 0,
+  isActive = true,
+  activeSubscribers = 0,
   currencyCode,
+  onSaved,
 }: {
-  planId: string;
-  displayName: string;
-  description: string | null;
-  priceMonthly: number;
-  priceYearly: number;
-  trialDays: number | null;
-  maxContacts: number;
-  maxMessagesMonthly: number;
-  maxBroadcastsMonthly: number;
-  maxFlows: number | null;
-  maxTeamMembers: number;
-  maxStorageMb: number;
-  isActive: boolean;
-  activeSubscribers: number;
+  planId?: string;
+  displayName?: string;
+  description?: string | null;
+  priceMonthly?: number;
+  priceYearly?: number;
+  trialDays?: number | null;
+  maxContacts?: number;
+  maxMessagesMonthly?: number;
+  maxBroadcastsMonthly?: number;
+  maxFlows?: number | null;
+  maxTeamMembers?: number;
+  maxStorageMb?: number;
+  isActive?: boolean;
+  activeSubscribers?: number;
   currencyCode: string;
+  /** Called after a successful save; a modal uses it to close. */
+  onSaved?: () => void;
 }) {
+  const creating = !planId;
   const [state, formAction] = useActionState<ActionState, FormData>(
-    updatePlan,
+    creating ? createPlan : updatePlan,
     {}
   );
+  useEffect(() => {
+    if (state.ok) onSaved?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
 
   return (
     <form action={formAction} className="space-y-5">
-      <input type="hidden" name="planId" value={planId} />
+      {planId ? <input type="hidden" name="planId" value={planId} /> : null}
 
       {activeSubscribers > 0 ? (
         <Callout tone="warn">
@@ -71,6 +83,20 @@ export function PlanForm({
       ) : null}
 
       <FieldGrid>
+        {creating ? (
+          <Field
+            label="Plan key"
+            hint="Permanent id, e.g. scale. Lowercase letters, numbers, - and _."
+          >
+            <Input
+              name="name"
+              required
+              maxLength={40}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </Field>
+        ) : null}
         <Field label="Display name">
           <Input name="displayName" defaultValue={displayName} required />
         </Field>
@@ -192,7 +218,9 @@ export function PlanForm({
 
       <FormMessage ok={state.ok} error={state.error} />
 
-      <SubmitButton pendingLabel="Saving…">Save plan</SubmitButton>
+      <SubmitButton pendingLabel="Saving…">
+        {creating ? 'Create plan' : 'Save plan'}
+      </SubmitButton>
     </form>
   );
 }
