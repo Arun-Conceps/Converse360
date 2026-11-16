@@ -16,6 +16,7 @@ import {
 } from '../../auth/guards/supabase-user.guard';
 import {
   WORKSPACE_COOKIE,
+  requestedWorkspaceId,
   resolveActiveWorkspace,
 } from '../../auth/active-workspace';
 
@@ -87,9 +88,7 @@ export class WorkspacesController {
     const active = await resolveActiveWorkspace(
       this.prisma,
       userId,
-      typeof res.req.cookies?.[WORKSPACE_COOKIE] === 'string'
-        ? (res.req.cookies[WORKSPACE_COOKIE] as string)
-        : undefined,
+      requestedWorkspaceId(res.req),
     );
 
     return res.status(HttpStatus.OK).json({

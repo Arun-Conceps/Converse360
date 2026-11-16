@@ -40,6 +40,28 @@ export const WORKSPACE_COOKIE = 'c360_ws';
  */
 export const WORKSPACE_HEADER = 'x-workspace-id';
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The workspace the CALLER ASKED FOR: the `x-workspace-id` header (mobile,
+ * which has no cookie jar) else the switcher cookie (web). Either way it is a
+ * request, never authority — `resolveActiveWorkspace` only matches it against
+ * `account_members`.
+ */
+export function requestedWorkspaceId(request: {
+  cookies?: Record<string, unknown>;
+  headers?: Record<string, unknown>;
+}): string | undefined {
+  const header = request.headers?.[WORKSPACE_HEADER];
+  const candidate =
+    (typeof header === 'string' && header) ||
+    (typeof request.cookies?.[WORKSPACE_COOKIE] === 'string' &&
+      (request.cookies[WORKSPACE_COOKIE] as string)) ||
+    undefined;
+  return candidate && UUID_RE.test(candidate) ? candidate : undefined;
+}
+
 export interface ActiveWorkspace {
   accountId: string;
   role: AccountRole;

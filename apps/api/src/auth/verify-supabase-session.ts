@@ -33,8 +33,16 @@ function getJwks(): ReturnType<typeof createRemoteJWKSet> {
  * refresh and rotation stay owned by apps/web's proxy.
  */
 export async function verifySupabaseSession(
-  request: Pick<Request, 'cookies'>,
+  request: Pick<Request, 'cookies' | 'headers'>,
 ): Promise<string> {
+  // The mobile app has no cookie jar: it sends its Supabase access token as a
+  // Bearer header. Strict match — an `startsWith('Bearer ')` check accepts the
+  // literal string "Bearer x" (see the note at the top of this file). Same
+  // verification as the cookie path, so both are one trust decision. Bearer
+  // requests carry no ambient credential, so they are not CSRF-able.
+  const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers?.authorization ?? '');
+  if (bearer) return verifyAccessToken(bearer[1]);
+
   const supabase = createServerClient(
     process.env.SUPABASE_URL!,
     process.env.SUPABASE_ANON_KEY!,

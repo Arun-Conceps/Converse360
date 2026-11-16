@@ -12,8 +12,8 @@ import { REQUIRE_ROLE_KEY } from '../decorators/require-role.decorator';
 import type { RequestWithAccountContext } from '../decorators/current-account.decorator';
 import { hasMinRole } from '../role-rank.util';
 import {
-  WORKSPACE_COOKIE,
   WORKSPACE_HEADER,
+  requestedWorkspaceId,
   resolveActiveWorkspace,
 } from '../active-workspace';
 import { verifySupabaseSession } from '../verify-supabase-session';
@@ -50,11 +50,10 @@ export class SupabaseAuthGuard implements CanActivate {
     // Migration 095: a user may be a member of several workspaces, so which
     // one this request is for comes from the switcher's cookie — matched
     // against `account_members`, never trusted. See active-workspace.ts.
-    const requested = request.cookies?.[WORKSPACE_COOKIE];
     const workspace = await resolveActiveWorkspace(
       this.prisma,
       userId,
-      typeof requested === 'string' && requested ? requested : undefined,
+      requestedWorkspaceId(request),
     );
 
     if (!workspace) {
