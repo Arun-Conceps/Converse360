@@ -1,9 +1,10 @@
-import { Bell, Search } from 'lucide-react';
+import { Bell } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
 import { MobileNav } from '@/components/shell/mobile-nav';
+import { GlobalSearch } from '@/components/shell/global-search';
 import { Nav } from '@/components/shell/nav';
 import { ProfileMenu } from '@/components/shell/profile-menu';
 import { ThemeToggle } from '@/components/shell/theme-toggle';
@@ -31,6 +32,22 @@ export default async function PanelLayout({
   const allowed = NAV.flatMap((group) => group.items)
     .filter((item) => can(staff, item.capability))
     .map((item) => item.href);
+
+  // Pages the search box can jump to: the menu this person may open, plus
+  // their own account screens.
+  const searchPages = [
+    ...NAV.flatMap((group) =>
+      group.items
+        .filter((item) => can(staff, item.capability))
+        .map((item) => ({
+          href: item.href,
+          label: item.label,
+          group: group.label,
+        }))
+    ),
+    { href: '/account', label: 'Profile', group: 'Account' },
+    { href: '/account/password', label: 'Change password', group: 'Account' },
+  ];
 
   // One cheap, indexed count for the menu: open tickets nobody owns. The
   // fleet health scan is deliberately NOT run here — it would cost every
@@ -101,27 +118,7 @@ export default async function PanelLayout({
               <Nav allowed={allowed} badges={badges} />
             </MobileNav>
 
-            <form
-              action="/clients"
-              method="get"
-              role="search"
-              className="relative max-w-md min-w-0 flex-1"
-            >
-              <Search
-                aria-hidden
-                className="text-muted pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2"
-              />
-              <label htmlFor="global-search" className="sr-only">
-                Search clients
-              </label>
-              <input
-                id="global-search"
-                name="q"
-                type="search"
-                placeholder="Search clients — name, email, WABA or phone ID, tenant ID"
-                className="border-ring bg-surface-2 text-ink placeholder:text-muted focus:border-primary focus:bg-surface h-10 w-full rounded-lg border pr-3 pl-9 text-sm"
-              />
-            </form>
+            <GlobalSearch pages={searchPages} />
 
             <div className="ml-auto flex items-center gap-1.5">
               {allowed.includes('/support') ? (

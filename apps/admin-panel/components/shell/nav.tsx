@@ -49,7 +49,7 @@ const ICONS: Record<NavIcon, LucideIcon> = {
 };
 
 /** Icons for sub-menu items, by route. */
-const ITEM_ICONS: Record<string, LucideIcon> = {
+export const ITEM_ICONS: Record<string, LucideIcon> = {
   '/incidents': ShieldAlert,
   '/support': LifeBuoy,
   '/onboarding': Rocket,

@@ -31,7 +31,10 @@ export function ThemeToggle() {
       className="text-ink-2 hover:bg-surface-2 grid size-9 place-items-center rounded-lg"
     >
       {/* Moon in light mode (go dark), sun in dark mode (go light). */}
-      <Moon aria-hidden className="size-[18px] [html[data-mode=dark]_&]:hidden" />
+      <Moon
+        aria-hidden
+        className="size-[18px] [html[data-mode=dark]_&]:hidden"
+      />
       <Sun
         aria-hidden
         className="hidden size-[18px] [html[data-mode=dark]_&]:block"
