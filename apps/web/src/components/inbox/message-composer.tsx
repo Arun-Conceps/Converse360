@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback, useEffect, KeyboardEvent } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo, KeyboardEvent } from 'react';
 import {
   Send,
   LayoutTemplate,
@@ -39,6 +39,15 @@ import {
 import { useAuth } from '@/hooks/use-auth';
 import { ReplyQuote } from './reply-quote';
 import type { ConversationChannel } from '@/types';
+import { useQuickReplies } from '@/hooks/use-quick-replies';
+import { QuickRepliesDialog } from './quick-replies-dialog';
+import {
+  fillQuickReply,
+  filterQuickReplies,
+  triggerQuery,
+  type QuickReply,
+  type QuickReplyVars,
+} from '@/lib/quick-replies/match';
 
 /** Media content types an agent can send from the composer. */
 export type ComposerMediaKind = 'image' | 'video' | 'document' | 'audio';
@@ -140,6 +149,11 @@ interface MessageComposerProps {
    * as truthfully as an actively moving cursor.
    */
   onTypingChange?: (typing: boolean) => void;
+  /**
+   * Who the chat is with, for filling {{name}} / {{first_name}} / {{phone}}
+   * when a quick reply is inserted.
+   */
+  contactVars?: QuickReplyVars;
 }
 
 function formatDuration(seconds: number): string {
@@ -165,8 +179,19 @@ export function MessageComposer({
   onSendProduct,
   onSendProductList,
   onTypingChange,
+  contactVars,
 }: MessageComposerProps) {
   const { accountId } = useAuth();
+  const {
+    replies: quickReplies,
+    reload: reloadQuickReplies,
+    recordUse,
+  } = useQuickReplies(accountId);
+  const [qrIndex, setQrIndex] = useState(0);
+  // The exact text the agent pressed Escape on. Keyed to the text rather
+  // than a boolean so typing anything further reopens the list.
+  const [qrDismissedFor, setQrDismissedFor] = useState<string | null>(null);
+  const [qrManageOpen, setQrManageOpen] = useState(false);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [drafting, setDrafting] = useState(false);
@@ -233,6 +258,15 @@ export function MessageComposer({
   const supportsTemplates = channel === 'whatsapp';
   const inputsDisabled = readOnly || sessionExpired;
 
+  // Quick replies: "/" at the start of the box, no space yet.
+  const qrQuery = inputsDisabled ? null : triggerQuery(text);
+  const qrOpen = qrQuery !== null && qrDismissedFor !== text;
+  const qrMatches = useMemo(
+    () => (qrOpen ? filterQuickReplies(quickReplies, qrQuery ?? '') : []),
+    [qrOpen, quickReplies, qrQuery]
+  );
+  const qrActive = Math.min(qrIndex, Math.max(qrMatches.length - 1, 0));
+
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
       clearInterval(timerRef.current);
@@ -277,19 +311,61 @@ export function MessageComposer({
     }
   }, [text, sending, sessionExpired, onSend, replyTo?.id]);
 
+  // Drop a quick reply into the box. It REPLACES the "/query" the agent
+  // typed and is NOT sent: they read and edit it first, which is why an
+  // unfilled token is left visible (see fillQuickReply).
+  const applyQuickReply = useCallback(
+    (r: QuickReply) => {
+      setText(fillQuickReply(r.body, contactVars ?? {}));
+      setQrIndex(0);
+      recordUse(r);
+      requestAnimationFrame(() => {
+        adjustHeight();
+        textareaRef.current?.focus();
+      });
+    },
+    [contactVars, recordUse, adjustHeight]
+  );
+
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (qrOpen && qrMatches.length > 0) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setQrIndex((qrActive + 1) % qrMatches.length);
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setQrIndex((qrActive - 1 + qrMatches.length) % qrMatches.length);
+          return;
+        }
+        // Enter and Tab choose the highlighted reply instead of sending
+        // "/pri" to a customer. Shift+Enter still means a new line.
+        if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+          e.preventDefault();
+          applyQuickReply(qrMatches[qrActive]);
+          return;
+        }
+      }
+      if (qrOpen && e.key === 'Escape') {
+        e.preventDefault();
+        setQrDismissedFor(text);
+        return;
+      }
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         handleSend();
       }
     },
-    [handleSend]
+    [qrOpen, qrMatches, qrActive, applyQuickReply, text, handleSend]
   );
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       setText(e.target.value);
+      setQrIndex(0);
+      setQrDismissedFor(null);
       adjustHeight();
     },
     [adjustHeight]
@@ -771,6 +847,64 @@ export function MessageComposer({
             )}
           </GatedButton>
 
+          <div className="relative flex-1">
+            {qrOpen && (
+              <div
+                role="listbox"
+                aria-label="Quick replies"
+                className="border-border bg-popover text-popover-foreground absolute right-0 bottom-full left-0 z-20 mb-2 overflow-hidden rounded-xl border shadow-lg"
+              >
+                {qrMatches.length === 0 ? (
+                  <p className="text-muted-foreground px-3 py-3 text-xs">
+                    {quickReplies.length === 0
+                      ? 'No quick replies yet.'
+                      : `No quick reply matches "/${qrQuery}".`}
+                  </p>
+                ) : (
+                  qrMatches.map((r, i) => (
+                    <button
+                      key={r.id}
+                      type="button"
+                      role="option"
+                      aria-selected={i === qrActive}
+                      // mousedown, not click: click fires after the textarea
+                      // has already lost focus and the list has closed.
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        applyQuickReply(r);
+                      }}
+                      onMouseEnter={() => setQrIndex(i)}
+                      className={cn(
+                        'flex w-full items-start gap-2 px-3 py-2 text-left',
+                        i === qrActive ? 'bg-muted' : 'hover:bg-muted/60'
+                      )}
+                    >
+                      <span className="text-primary shrink-0 text-sm font-medium">
+                        /{r.shortcut}
+                      </span>
+                      <span className="text-muted-foreground line-clamp-1 text-xs">
+                        {r.body}
+                      </span>
+                    </button>
+                  ))
+                )}
+                <div className="border-border flex items-center justify-between border-t px-3 py-1.5">
+                  <span className="text-muted-foreground text-[10px]">
+                    ↑↓ move · Enter insert · Esc close
+                  </span>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      setQrManageOpen(true);
+                    }}
+                    className="text-primary text-[11px] font-medium hover:underline"
+                  >
+                    {canSend ? 'Manage quick replies' : 'View quick replies'}
+                  </button>
+                </div>
+              </div>
+            )}
           <textarea
             ref={textareaRef}
             value={text}
@@ -792,10 +926,11 @@ export function MessageComposer({
               readOnly ? "Read-only — your role can't send messages" : undefined
             }
             className={cn(
-              'border-border bg-muted text-foreground placeholder-muted-foreground focus:border-primary/50 flex-1 resize-none rounded-xl border px-4 py-2.5 text-sm transition-colors outline-none',
+              'border-border bg-muted text-foreground placeholder-muted-foreground focus:border-primary/50 w-full resize-none rounded-xl border px-4 py-2.5 text-sm transition-colors outline-none',
               (sessionExpired || readOnly) && 'cursor-not-allowed opacity-50'
             )}
           />
+          </div>
 
           <GatedButton
             size="sm"
@@ -817,9 +952,17 @@ export function MessageComposer({
           tap a disabled button reads as a broken button. */}
       {!draft && !recording && !sessionExpired && (
         <p className="text-muted-foreground mt-1 pl-[5.5rem] text-[10px]">
-          Tap the ✨ to draft a reply with AI — you can edit it before sending
+          Tap the ✨ to draft a reply with AI — you can edit it before sending · Type / for quick replies
         </p>
       )}
+
+      <QuickRepliesDialog
+        open={qrManageOpen}
+        onOpenChange={setQrManageOpen}
+        replies={quickReplies}
+        onChanged={reloadQuickReplies}
+        canEdit={canSend}
+      />
 
       <ProductPicker
         open={productPickerOpen}

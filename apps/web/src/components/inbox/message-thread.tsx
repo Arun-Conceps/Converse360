@@ -68,6 +68,16 @@ import { deleteAccountMedia } from "@/lib/storage/upload-media";
 import { TemplatePicker, type TemplateSendValues } from "./template-picker";
 import { buildReplyPreview } from "./reply-quote";
 import { toast } from "sonner";
+import { NoteBubble } from "./note-bubble";
+import { NoteComposer } from "./note-composer";
+import { useContactNotes } from "@/hooks/use-contact-notes";
+import { useCan } from "@/hooks/use-can";
+import { buildMentionables } from "@/lib/notes/mentions";
+import {
+  groupItemsByDate,
+  mergeThread,
+  visibleNotesFor,
+} from "@/lib/inbox/thread-items";
 
 interface ReplyDraft {
   id: string;
@@ -157,23 +167,6 @@ function formatDateSeparator(dateStr: string): string {
   return format(date, "MMMM d, yyyy");
 }
 
-function groupMessagesByDate(messages: Message[]) {
-  const groups: { date: string; messages: Message[] }[] = [];
-  let currentDate = "";
-
-  for (const msg of messages) {
-    const day = format(new Date(msg.created_at), "yyyy-MM-dd");
-    if (day !== currentDate) {
-      currentDate = day;
-      groups.push({ date: msg.created_at, messages: [msg] });
-    } else {
-      groups[groups.length - 1].messages.push(msg);
-    }
-  }
-
-  return groups;
-}
-
 const STATUS_OPTIONS: { label: string; value: ConversationStatus; color: string }[] = [
   { label: "Open", value: "open", color: "text-primary" },
   { label: "Pending", value: "pending", color: "text-warning" },
@@ -226,6 +219,19 @@ export function MessageThread({
   const oldestMessageAtRef = useRef<string | null>(null);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  // Private notes. Contact-level, so the same person shows the same notes in
+  // every conversation with them (migration 100).
+  const { notes: contactNotes, addNote } = useContactNotes(contact?.id, accountId);
+  const canNote = useCan("send-messages");
+  const mentionables = useMemo(() => buildMentionables(profiles), [profiles]);
+  // Keyed by conversation so switching threads lands back on "Reply" rather
+  // than leaving the next customer's box in note mode.
+  const [modeState, setModeState] = useState<{
+    id: string | null;
+    mode: "reply" | "note";
+  }>({ id: null, mode: "reply" });
+  const composerMode =
+    canNote && modeState.id === (conversation?.id ?? null) ? modeState.mode : "reply";
   /**
    * The workspace's AI agents, so the Owner dropdown can hand a thread to
    * one. Only ACTIVE agents are offered: assigning a paused agent would
@@ -585,7 +591,7 @@ export function MessageThread({
       const el = scrollRef.current;
       el.scrollTop = el.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, contactNotes.length]);
 
   // ── Load older messages ─────────────────────────────────────────
   const handleLoadOlderMessages = useCallback(async () => {
@@ -1240,7 +1246,15 @@ export function MessageThread({
   // Instagram contacts have no phone — see lib/contacts/display.
   const displayName = displayNameFor(contact);
   const contactSubtitle = contactHandle(contact);
-  const messageGroups = groupMessagesByDate(messages);
+  const visibleNotes = visibleNotesFor(contactNotes, messages, hasMoreMessages);
+  const messageGroups = groupItemsByDate(mergeThread(messages, visibleNotes));
+  const noteAuthor = (userId: string) =>
+    userId === user?.id
+      ? "You"
+      : (() => {
+          const p = profiles.find((x) => x.user_id === userId);
+          return p?.full_name?.trim() || p?.email || "Teammate";
+        })();
   const currentStatus = STATUS_OPTIONS.find(
     (s) => s.value === conversation.status
   );
@@ -1631,7 +1645,19 @@ export function MessageThread({
                 </div>
                 {/* Messages */}
                 <div className="space-y-2">
-                  {group.messages.map((msg) => {
+                  {group.items.map((item) => {
+                    if (item.kind === "note") {
+                      return (
+                        <NoteBubble
+                          key={`note-${item.note.id}`}
+                          note={item.note}
+                          author={noteAuthor(item.note.user_id)}
+                          mentionables={mentionables}
+                          currentUserId={user?.id}
+                        />
+                      );
+                    }
+                    const msg = item.msg;
                     const parent = msg.reply_to_message_id
                       ? messagesById.get(msg.reply_to_message_id)
                       : null;
@@ -1696,6 +1722,59 @@ export function MessageThread({
           extend. Same principle as the `replyTo` reset above — that one
           stays here because it is this component's state, not the
           composer's. */}
+      {/* Reply / Private note. Only for people who can write: the policies on
+          contact_notes need an agent or above, the same line the composer
+          draws. */}
+      {canNote && (
+        <div
+          role="tablist"
+          aria-label="Reply or private note"
+          className="border-border bg-card flex gap-1 border-t px-3 pt-2"
+        >
+          {(["reply", "note"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              role="tab"
+              aria-selected={composerMode === m}
+              onClick={() => setModeState({ id: conversation.id, mode: m })}
+              className={
+                "rounded-md px-3 py-1 text-xs font-medium transition-colors " +
+                (composerMode === m
+                  ? m === "note"
+                    ? "bg-warning-surface text-warning"
+                    : "bg-muted text-foreground"
+                  : "text-muted-foreground hover:text-foreground")
+              }
+            >
+              {m === "reply" ? "Reply" : "Private note"}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {composerMode === "note" && (
+        <div className="border-border bg-card px-3 py-3">
+          <NoteComposer
+            key={conversation.id}
+            mentionables={mentionables}
+            readOnly={!canNote}
+            onSubmit={async (text, mentionedUserIds) => {
+              if (!user) throw new Error("You are signed out");
+              await addNote({
+                text,
+                userId: user.id,
+                mentionedUserIds,
+                conversationId: conversation.id,
+              });
+            }}
+          />
+        </div>
+      )}
+
+      {/* The reply composer stays MOUNTED while a note is being written (hidden,
+          not unmounted), so a half-typed reply survives toggling. */}
+      <div className={composerMode === "note" ? "hidden" : undefined}>
       <MessageComposer
         key={conversation.id}
         conversationId={conversation.id}
@@ -1709,7 +1788,17 @@ export function MessageThread({
         onSendProduct={handleSendProduct}
         onSendProductList={handleSendProductList}
         onTypingChange={onComposingChange}
+        contactVars={
+          contact
+            ? {
+                name: contact.name,
+                phone: contact.phone,
+                igScopedId: contact.ig_scoped_id,
+              }
+            : undefined
+        }
       />
+      </div>
 
       {/* Templates are a WhatsApp mechanism. Instagram has none, and web
           needs none — we render the bubble, so there is nothing to

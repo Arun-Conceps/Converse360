@@ -252,6 +252,10 @@ export interface ContactNote {
   user_id: string;
   note_text: string;
   created_at: string;
+  /** Teammates tagged with @name (migration 100). */
+  mentioned_user_ids?: string[];
+  /** Where the note was written; notes still belong to the contact. */
+  conversation_id?: string | null;
 }
 
 export type ConversationStatus = 'open' | 'pending' | 'closed';
@@ -312,7 +316,7 @@ export interface Conversation {
 // Notifications (migration 027)
 // ============================================================
 
-export type NotificationType = 'conversation_assigned';
+export type NotificationType = 'conversation_assigned' | 'note_mention';
 
 export interface Notification {
   id: string;

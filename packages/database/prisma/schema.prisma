@@ -36,6 +36,7 @@ model Account {
   ai_credit_orders              ai_credit_orders[]
   ai_credit_wallets             ai_credit_wallets?
   media_assets                  media_assets[]
+  quick_replies                 quick_replies[]
   ai_knowledge_chunks           ai_knowledge_chunks[]
   ai_knowledge_documents        ai_knowledge_documents[]
   google_script_connection      google_script_connections?
@@ -693,6 +694,7 @@ model users {
   ai_credit_orders                                                   ai_credit_orders[]
   ai_knowledge_documents                                             ai_knowledge_documents[]
   media_assets                                                       media_assets[]
+  quick_replies                                                      quick_replies[]
   api_keys                                                           ApiKey[]
   automationLogs                                                     AutomationLog[]
   automationPendingExecutions                                        AutomationPendingExecution[]
@@ -1274,9 +1276,16 @@ model contact_notes {
   note_text  String
   created_at DateTime? @default(now()) @db.Timestamptz(6)
   account_id String    @db.Uuid
+  /// Teammates tagged with @name. Untrusted input: the notify trigger
+  /// (migration 100) re-checks workspace membership before notifying.
+  mentioned_user_ids String[] @default([]) @db.Uuid
+  /// Where the note was written, so a mention can link back. Notes belong
+  /// to the CONTACT; never filter by this.
+  conversation_id String? @db.Uuid
   accounts   Account   @relation(fields: [account_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   contacts   contacts  @relation(fields: [contact_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  conversations conversations? @relation(fields: [conversation_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
   @@index([account_id], map: "idx_contact_notes_account")
   @@schema("public")
@@ -1468,6 +1477,7 @@ model conversations {
   instagram_comments    instagram_comments[]
   message_reactions     message_reactions[]
   messages              messages[]
+  contact_notes contact_notes[]
   notifications         notifications[]
   web_sessions          web_sessions[]
 
@@ -3027,6 +3037,31 @@ model media_assets {
   @@index([account_id, created_at(sort: Desc)], map: "idx_media_assets_account_created")
   @@index([account_id, kind], map: "idx_media_assets_account_kind")
   @@map("media_assets")
+  @@schema("public")
+}
+
+/// Saved replies an agent inserts from the inbox composer with "/".
+/// Written from the BROWSER under RLS (policies call is_account_member,
+/// agents and above may write); nothing in apps/api reads it today.
+/// `shortcut` is lower-case [a-z0-9_-] and unique per workspace.
+/// Migration 099.
+model quick_replies {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  account_id String   @db.Uuid
+  shortcut   String
+  body       String
+  media_url  String?
+  media_kind String?
+  created_by String?  @db.Uuid
+  use_count  Int      @default(0)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+  accounts   Account  @relation(fields: [account_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users      users?   @relation(fields: [created_by], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@unique([account_id, shortcut])
+  @@index([account_id, use_count(sort: Desc), shortcut], map: "idx_quick_replies_account_used")
+  @@map("quick_replies")
   @@schema("public")
 }
 
