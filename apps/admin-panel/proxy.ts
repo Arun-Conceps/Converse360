@@ -41,6 +41,9 @@ export const config = {
   // Without a matcher this runs on static assets too, and an auth redirect on
   // /_next/static would break the CSS on the very page it redirects to.
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|ico)$).*)',
+    // `icon` / `apple-icon` are the generated favicon routes (app/icon.tsx).
+    // They have no file extension, so without listing them here the gate
+    // answered the browser's favicon request with the login page.
+    '/((?!_next/static|_next/image|favicon.ico|icon$|apple-icon$|.*\\.(?:svg|png|ico)$).*)',
   ],
 };
