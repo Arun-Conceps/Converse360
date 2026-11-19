@@ -427,12 +427,24 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 ]),
                 Row(spacing: 6, crossAxisAlignment: CrossAxisAlignment.end, children: [
                   if (_mode == _Mode.reply)
+                    // Always tappable: when sending is blocked, say WHY instead
+                    // of a button that looks live and silently does nothing.
                     IconButton(
                       tooltip: 'Attach',
-                      onPressed: !inputEnabled || _busy || c == null
+                      onPressed: _busy || c == null
                           ? null
-                          : () => _attachSheet(c),
-                      icon: const Icon(Icons.attach_file, color: C.muted),
+                          : () {
+                              if (!canWrite) {
+                                _toast('You have read-only access in this workspace.');
+                              } else if (!windowOpen) {
+                                _toast('Photos and documents can only be sent within 24 hours '
+                                    'of the customer\'s last message. Send an approved template instead.');
+                              } else {
+                                _attachSheet(c);
+                              }
+                            },
+                      icon: Icon(Icons.attach_file,
+                          color: inputEnabled ? C.accent : C.muted.withValues(alpha: 0.45)),
                     ),
                   Expanded(
                     child: TextField(

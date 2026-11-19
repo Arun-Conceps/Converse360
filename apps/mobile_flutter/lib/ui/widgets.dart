@@ -159,3 +159,172 @@ class SearchField extends StatelessWidget {
         ),
       );
 }
+
+/// One status chip for every list (broadcasts, templates, flows...). Single
+/// brand colour, told apart by FILL and ICON rather than by hue:
+///   done (sent / approved / active)        filled green, check
+///   in progress (scheduled / pending ...)  green outline, clock
+///   draft / unknown                        grey
+///   failed / rejected                      red — the one exception, because
+///                                          it needs someone to act on it.
+class StatusChip extends StatelessWidget {
+  const StatusChip(this.status, {super.key});
+  final String status;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = status.toLowerCase();
+    final (IconData icon, Color fg, Color bg, Color? border) = switch (s) {
+      'sent' || 'approved' || 'active' || 'published' || 'delivered' =>
+        (Icons.check_circle, Colors.white, C.accent, null),
+      'scheduled' || 'pending' || 'queued' || 'sending' || 'in_review' =>
+        (Icons.schedule, C.accent, C.surface, C.accent),
+      'failed' || 'rejected' || 'error' =>
+        (Icons.error_outline, C.bad, C.badSoft, null),
+      _ => (Icons.edit_note, C.muted, C.surface2, null),
+    };
+    final label = s.isEmpty ? '' : '${s[0].toUpperCase()}${s.substring(1).replaceAll('_', ' ')}';
+    return Container(
+      padding: const EdgeInsets.fromLTRB(7, 3, 9, 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(99),
+        border: border == null ? null : Border.all(color: border),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, spacing: 4, children: [
+        Icon(icon, size: 13, color: fg),
+        Text(label,
+            style: TextStyle(
+                color: fg, fontSize: 11.5, fontWeight: FontWeight.w700)),
+      ]),
+    );
+  }
+}
+
+/// Uppercase grey heading above a group, e.g. "NEEDS ATTENTION".
+class SectionLabel extends StatelessWidget {
+  const SectionLabel(this.text, {super.key, this.trailing});
+  final String text;
+  final Widget? trailing;
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(4, 22, 4, 10),
+        child: Row(children: [
+          Expanded(
+            child: Text(text.toUpperCase(),
+                style: const TextStyle(
+                    color: C.muted,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.8)),
+          ),
+          ?trailing,
+        ]),
+      );
+}
+
+/// White rounded card with a soft shadow — the surface every list sits on.
+BoxDecoration cardDecoration({double radius = 16}) => BoxDecoration(
+      color: C.surface,
+      borderRadius: BorderRadius.circular(radius),
+      boxShadow: [
+        BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 3)),
+      ],
+    );
+
+/// Round tinted icon tile used at the start of list rows.
+class IconTile extends StatelessWidget {
+  const IconTile(this.icon, {super.key, this.size = 42, this.filled = false});
+  final IconData icon;
+  final double size;
+  final bool filled;
+  @override
+  Widget build(BuildContext context) => Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+            color: filled ? C.accent : C.accentSoft,
+            borderRadius: BorderRadius.circular(size * 0.29)),
+        child: Icon(icon,
+            size: size * 0.52, color: filled ? Colors.white : C.accent),
+      );
+}
+
+/// THE way to open a bottom sheet from a tab screen.
+/// - useRootNavigator: a tab's own navigator sits under the floating nav bar,
+///   so a sheet opened there is drawn BEHIND it.
+/// - Scrolls, capped at 85% of the screen: content taller than the default
+///   9/16 cap otherwise overflows (the yellow-black stripe).
+/// - Never wider than [kMaxContentWidth] on a tablet or landscape.
+Future<T?> showAppSheet<T>(BuildContext context,
+        {required WidgetBuilder builder}) =>
+    showModalBottomSheet<T>(
+      context: context,
+      useRootNavigator: true,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: C.surface,
+      constraints: BoxConstraints(
+        maxWidth: kMaxContentWidth,
+        maxHeight: MediaQuery.sizeOf(context).height * 0.85,
+      ),
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: builder(ctx),
+        ),
+      ),
+    );
+
+/// Content never stretches past this on tablets / landscape; it centres.
+const double kMaxContentWidth = 640;
+
+/// Centres [child] and caps its width at [kMaxContentWidth]. On a phone it
+/// does nothing; on a tablet it keeps lines and cards a readable size.
+class MaxWidth extends StatelessWidget {
+  const MaxWidth({super.key, required this.child});
+  final Widget child;
+  @override
+  Widget build(BuildContext context) => Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: kMaxContentWidth),
+          child: child,
+        ),
+      );
+}
+
+/// Lays children out in [columns] equal columns, dropping to one column when
+/// each would be narrower than [minItemWidth] (small phones, large text).
+class ResponsiveGrid extends StatelessWidget {
+  const ResponsiveGrid({
+    super.key,
+    required this.children,
+    this.columns = 2,
+    this.minItemWidth = 140,
+    this.spacing = 10,
+  });
+  final List<Widget> children;
+  final int columns;
+  final double minItemWidth;
+  final double spacing;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(builder: (_, c) {
+        var cols = columns;
+        while (cols > 1 &&
+            (c.maxWidth - spacing * (cols - 1)) / cols < minItemWidth) {
+          cols--;
+        }
+        final w = (c.maxWidth - spacing * (cols - 1)) / cols;
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: [for (final ch in children) SizedBox(width: w, child: ch)],
+        );
+      });
+}

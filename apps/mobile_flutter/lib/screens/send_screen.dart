@@ -20,39 +20,34 @@ class SendScreen extends ConsumerStatefulWidget {
 class _SendScreenState extends ConsumerState<SendScreen> {
   bool _reports = true;
 
-  PillTone _tone(String status) => switch (status.toLowerCase()) {
-        'sent' || 'approved' => PillTone.ok,
-        'sending' || 'queued' || 'pending' || 'scheduled' => PillTone.warn,
-        'failed' || 'rejected' => PillTone.bad,
-        _ => PillTone.plain,
-      };
+  static int _pct(int part, int whole) =>
+      whole == 0 ? 0 : (part * 100 / whole).round();
+
+  EdgeInsets _listPadding(BuildContext context) =>
+      EdgeInsets.fromLTRB(16, 4, 16, 16 + MediaQuery.paddingOf(context).bottom);
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Send')),
-      body: Column(children: [
-        Container(
-          color: C.surface,
-          padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
-          child: Row(spacing: 6, children: [
-            ChoiceChip(
-                label: const Text('Reports'),
-                selected: _reports,
-                onSelected: (_) => setState(() => _reports = true)),
-            ChoiceChip(
-                label: const Text('Templates'),
-                selected: !_reports,
-                onSelected: (_) => setState(() => _reports = false)),
-          ]),
+      appBar: AppBar(title: const Text('Send'), titleSpacing: 16),
+      body: MaxWidth(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              child: _Segmented(
+                reports: _reports,
+                onChanged: (v) => setState(() => _reports = v),
+              ),
+            ),
+            Expanded(child: _reports ? _reportsList() : _templatesList()),
+          ],
         ),
-        const Divider(),
-        const BannerStrip(
-            'Create and schedule broadcasts on the web for now. The app will add it together with opt-out handling.'),
-        Expanded(child: _reports ? _reportsList() : _templatesList()),
-      ]),
+      ),
     );
   }
+
+  // ---- reports ---------------------------------------------------------------
 
   Widget _reportsList() {
     final b = ref.watch(broadcastsProvider);
@@ -60,64 +55,131 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => EmptyState('Could not load broadcasts', hint: '$e'),
       data: (list) => list.isEmpty
-          ? const EmptyState('No broadcasts yet')
+          ? const _Empty(
+              icon: Icons.campaign_outlined,
+              title: 'No broadcasts yet',
+              hint: 'Broadcasts you send from the web show their results here.',
+            )
           : RefreshIndicator(
               onRefresh: () async => ref.refresh(broadcastsProvider.future),
-              child: ListView.builder(
+              child: ListView.separated(
+                padding: _listPadding(context),
                 itemCount: list.length,
-                itemBuilder: (_, i) {
-                  final x = list[i];
-                  final readPct = x.sent == 0 ? 0 : (x.read * 100 / x.sent).round();
-                  return ListTile(
-                    tileColor: C.surface,
-                    title: Text(x.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                    subtitle: Text(x.status == 'scheduled' && x.scheduledAt != null
-                        ? 'Goes out ${DateFormat.MMMd().add_jm().format(x.scheduledAt!.toLocal())}'
-                        : '${x.sent} sent · $readPct% read · ${DateFormat.MMMd().format(x.createdAt.toLocal())}'),
-                    trailing: Pill(x.status, tone: _tone(x.status)),
-                    onTap: () => _report(x),
-                  );
-                },
+                separatorBuilder: (_, _) => const SizedBox(height: 10),
+                itemBuilder: (_, i) =>
+                    _BroadcastCard(x: list[i], onTap: () => _report(list[i])),
               ),
             ),
     );
   }
 
   void _report(Broadcast x) {
-    Widget stat(String l, int v) => Expanded(
-          child: Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-                color: C.surface,
-                border: Border.all(color: C.line),
-                borderRadius: BorderRadius.circular(14)),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('$v', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
-              Text(l, style: const TextStyle(fontSize: 12, color: C.muted)),
-            ]),
+    Widget stat(IconData icon, String label, int v, {int? of}) => Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: C.surface2,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        spacing: 10,
+        children: [
+          IconTile(icon, size: 36),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$v',
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                Text(
+                  of == null ? label : '$label · ${_pct(v, of)}%',
+                  style: const TextStyle(fontSize: 12, color: C.muted),
+                ),
+              ],
+            ),
           ),
-        );
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          child: Column(mainAxisSize: MainAxisSize.min, spacing: 10, children: [
-            Text(x.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-            Text('Template: ${x.templateName}', style: const TextStyle(color: C.muted)),
-            Row(spacing: 10, children: [stat('Sent', x.sent), stat('Delivered', x.delivered)]),
-            Row(spacing: 10, children: [stat('Read', x.read), stat('Replied', x.replied)]),
-            if (x.failed > 0)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Pill('${x.failed} failed', tone: PillTone.bad),
+        ],
+      ),
+    );
+    showAppSheet<void>(
+      context,
+      builder: (_) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        spacing: 10,
+        children: [
+          Wrap(
+            spacing: 10,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                x.name,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
-          ]),
-        ),
+              StatusChip(x.status),
+            ],
+          ),
+          Row(
+            spacing: 6,
+            children: [
+              const Icon(Icons.description_outlined, size: 16, color: C.muted),
+              Expanded(
+                child: Text(
+                  'Template: ${x.templateName}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: C.muted),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          ResponsiveGrid(
+            children: [
+              stat(Icons.send_outlined, 'Sent', x.sent),
+              stat(Icons.done_all, 'Delivered', x.delivered, of: x.sent),
+              stat(Icons.visibility_outlined, 'Read', x.read, of: x.sent),
+              stat(Icons.reply_outlined, 'Replied', x.replied, of: x.sent),
+            ],
+          ),
+          if (x.failed > 0)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: C.badSoft,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                spacing: 8,
+                children: [
+                  const Icon(Icons.error_outline, color: C.bad, size: 18),
+                  Expanded(
+                    child: Text(
+                      '${x.failed} messages failed to send',
+                      style: const TextStyle(
+                        color: C.bad,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
       ),
     );
   }
+
+  // ---- templates -------------------------------------------------------------
 
   Widget _templatesList() {
     final t = ref.watch(templatesProvider);
@@ -125,49 +187,364 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => EmptyState('Could not load templates', hint: '$e'),
       data: (list) => list.isEmpty
-          ? const EmptyState('No templates yet')
-          : ListView.builder(
-              itemCount: list.length,
-              itemBuilder: (_, i) {
-                final x = list[i];
-                return ListTile(
-                  tileColor: C.surface,
-                  title: Text(x.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                  subtitle: Text(x.body, maxLines: 2, overflow: TextOverflow.ellipsis),
-                  trailing: Pill(x.status.toLowerCase(), tone: _tone(x.status)),
-                  onTap: () => showModalBottomSheet<void>(
-                    context: context,
-                    showDragHandle: true,
-                    builder: (_) => SafeArea(
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                        child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            spacing: 10,
-                            children: [
-                              Text(x.name,
-                                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-                              Row(spacing: 6, children: [
-                                Pill(x.status.toLowerCase(), tone: _tone(x.status)),
-                                Pill(x.category),
-                              ]),
-                              Container(
-                                  width: double.infinity,
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                      color: C.out, borderRadius: BorderRadius.circular(12)),
-                                  child: Text(x.body)),
-                              if (x.rejectionReason != null)
-                                Text('Meta said: ${x.rejectionReason}',
-                                    style: const TextStyle(color: C.bad)),
-                            ]),
-                      ),
-                    ),
-                  ),
-                );
-              },
+          ? const _Empty(
+              icon: Icons.description_outlined,
+              title: 'No templates yet',
+              hint: 'WhatsApp templates you create on the web show up here.',
+            )
+          : RefreshIndicator(
+              onRefresh: () async => ref.refresh(templatesProvider.future),
+              child: ListView.separated(
+                padding: _listPadding(context),
+                itemCount: list.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 10),
+                itemBuilder: (_, i) =>
+                    _TemplateCard(x: list[i], onTap: () => _template(list[i])),
+              ),
             ),
     );
   }
+
+  void _template(Template x) => showAppSheet<void>(
+    context,
+    builder: (_) => Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      spacing: 12,
+      children: [
+        Text(
+          x.name,
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+        ),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            StatusChip(x.status),
+            if (x.category.isNotEmpty) _Category(x.category),
+          ],
+        ),
+        _Bubble(x.body),
+        if (x.rejectionReason != null)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: C.badSoft,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              'Meta said: ${x.rejectionReason}',
+              style: const TextStyle(color: C.bad),
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
+/// Two-option switch: a white track with the chosen side filled green.
+class _Segmented extends StatelessWidget {
+  const _Segmented({required this.reports, required this.onChanged});
+  final bool reports;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget side(bool value, IconData icon, String label) {
+      final on = reports == value;
+      return Expanded(
+        child: Semantics(
+          button: true,
+          selected: on,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => onChanged(value),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              height: kHit,
+              decoration: BoxDecoration(
+                color: on ? C.accent : Colors.transparent,
+                borderRadius: BorderRadius.circular(99),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                spacing: 6,
+                children: [
+                  Icon(icon, size: 18, color: on ? Colors.white : C.muted),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: on ? Colors.white : C.muted,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: cardDecoration(radius: 99),
+      child: Row(
+        children: [
+          side(true, Icons.insights_outlined, 'Reports'),
+          side(false, Icons.description_outlined, 'Templates'),
+        ],
+      ),
+    );
+  }
+}
+
+class _BroadcastCard extends StatelessWidget {
+  const _BroadcastCard({required this.x, required this.onTap});
+  final Broadcast x;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheduled = x.status == 'scheduled' && x.scheduledAt != null;
+    final readPct = _SendScreenState._pct(x.read, x.sent);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Ink(
+          decoration: cardDecoration(),
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            spacing: 10,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                spacing: 12,
+                children: [
+                  IconTile(Icons.campaign_outlined, filled: x.status == 'sent'),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      spacing: 3,
+                      children: [
+                        Text(
+                          x.name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            height: 1.25,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        Text(
+                          scheduled
+                              ? 'Goes out ${DateFormat.MMMd().add_jm().format(x.scheduledAt!.toLocal())}'
+                              : DateFormat.yMMMd().format(
+                                  x.createdAt.toLocal(),
+                                ),
+                          style: const TextStyle(
+                            color: C.muted,
+                            fontSize: 12.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  StatusChip(x.status),
+                ],
+              ),
+              if (!scheduled && x.status != 'draft') ...[
+                Row(
+                  spacing: 16,
+                  children: [
+                    _Metric(Icons.send_outlined, '${x.sent}', 'sent'),
+                    _Metric(Icons.visibility_outlined, '$readPct%', 'read'),
+                    if (x.replied > 0)
+                      _Metric(Icons.reply_outlined, '${x.replied}', 'replied'),
+                  ],
+                ),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(99),
+                  child: LinearProgressIndicator(
+                    value: readPct / 100,
+                    minHeight: 6,
+                    color: C.accent,
+                    backgroundColor: C.accentSoft,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Metric extends StatelessWidget {
+  const _Metric(this.icon, this.value, this.label);
+  final IconData icon;
+  final String value;
+  final String label;
+  @override
+  Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    spacing: 4,
+    children: [
+      Icon(icon, size: 15, color: C.accent),
+      Text(
+        value,
+        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
+      ),
+      Text(label, style: const TextStyle(fontSize: 12.5, color: C.muted)),
+    ],
+  );
+}
+
+class _TemplateCard extends StatelessWidget {
+  const _TemplateCard({required this.x, required this.onTap});
+  final Template x;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: Colors.transparent,
+    child: InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: onTap,
+      child: Ink(
+        decoration: cardDecoration(),
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          spacing: 10,
+          children: [
+            Row(
+              spacing: 12,
+              children: [
+                const IconTile(Icons.description_outlined, size: 38),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    spacing: 2,
+                    children: [
+                      Text(
+                        x.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      if (x.category.isNotEmpty)
+                        Text(
+                          _Category.pretty(x.category),
+                          style: const TextStyle(color: C.muted, fontSize: 12),
+                        ),
+                    ],
+                  ),
+                ),
+                StatusChip(x.status),
+              ],
+            ),
+            _Bubble(x.body, maxLines: 2),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+/// The template text drawn like the WhatsApp message the customer receives.
+class _Bubble extends StatelessWidget {
+  const _Bubble(this.text, {this.maxLines});
+  final String text;
+  final int? maxLines;
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+    decoration: const BoxDecoration(
+      color: C.out,
+      borderRadius: BorderRadius.only(
+        topLeft: Radius.circular(4),
+        topRight: Radius.circular(14),
+        bottomLeft: Radius.circular(14),
+        bottomRight: Radius.circular(14),
+      ),
+    ),
+    child: Text(
+      text,
+      maxLines: maxLines,
+      overflow: maxLines == null ? null : TextOverflow.ellipsis,
+      style: const TextStyle(fontSize: 13.5, height: 1.4, color: C.fg),
+    ),
+  );
+}
+
+class _Category extends StatelessWidget {
+  const _Category(this.category);
+  final String category;
+  static String pretty(String c) {
+    final s = c.toLowerCase().replaceAll('_', ' ');
+    return s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';
+  }
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+    decoration: BoxDecoration(
+      color: C.surface2,
+      borderRadius: BorderRadius.circular(99),
+    ),
+    child: Text(
+      pretty(category),
+      style: const TextStyle(
+        color: C.muted,
+        fontSize: 11.5,
+        fontWeight: FontWeight.w700,
+      ),
+    ),
+  );
+}
+
+class _Empty extends StatelessWidget {
+  const _Empty({required this.icon, required this.title, required this.hint});
+  final IconData icon;
+  final String title;
+  final String hint;
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        spacing: 10,
+        children: [
+          CircleAvatar(
+            radius: 36,
+            backgroundColor: C.accentSoft,
+            child: Icon(icon, size: 34, color: C.accent),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            title,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+          ),
+          Text(
+            hint,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: C.muted, height: 1.4),
+          ),
+        ],
+      ),
+    ),
+  );
 }

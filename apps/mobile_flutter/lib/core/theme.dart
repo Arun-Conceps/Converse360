@@ -17,6 +17,13 @@ class C {
   static const badSoft = Color(0xFFF9DEDC);
 }
 
+/// The one brand gradient for hero cards (Deals summary, More header).
+const kBrandGradient = LinearGradient(
+  begin: Alignment.topLeft,
+  end: Alignment.bottomRight,
+  colors: [Color(0xFF0B7A5C), Color(0xFF0E9F76)],
+);
+
 /// Spec section 4: 44pt minimum touch targets.
 const double kHit = 44;
 
@@ -40,9 +47,28 @@ ThemeData buildTheme() {
       titleTextStyle:
           TextStyle(fontSize: 19, fontWeight: FontWeight.w700, color: C.fg),
     ),
-    navigationBarTheme: const NavigationBarThemeData(
+    // Selected tab: filled icon on a green pill, green bold label. The rest stay
+    // muted, so where you are is the only coloured thing in the bar.
+    navigationBarTheme: NavigationBarThemeData(
       backgroundColor: C.surface,
-      indicatorColor: C.accentSoft,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      height: 70,
+      indicatorColor: C.accent,
+      indicatorShape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+      iconTheme: WidgetStateProperty.resolveWith((s) => IconThemeData(
+            size: 23,
+            color: s.contains(WidgetState.selected) ? Colors.white : C.muted,
+          )),
+      labelTextStyle: WidgetStateProperty.resolveWith((s) => TextStyle(
+            fontSize: 12,
+            fontWeight: s.contains(WidgetState.selected)
+                ? FontWeight.w700
+                : FontWeight.w500,
+            color: s.contains(WidgetState.selected) ? C.accent : C.muted,
+          )),
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
