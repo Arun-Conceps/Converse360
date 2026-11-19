@@ -83,6 +83,7 @@ class Message {
     required this.createdAt,
     this.contentText,
     this.templateName,
+    this.mediaUrl,
   });
   final String id;
   final String senderType; // customer | agent | bot
@@ -91,6 +92,9 @@ class Message {
   final DateTime createdAt;
   final String? contentText;
   final String? templateName;
+
+  /// Public https URL only; inbound Meta media may be an opaque id instead.
+  final String? mediaUrl;
 
   bool get fromCustomer => senderType == 'customer';
 
@@ -102,6 +106,7 @@ class Message {
         createdAt: DateTime.parse(j['created_at'] as String),
         contentText: j['content_text'] as String?,
         templateName: j['template_name'] as String?,
+        mediaUrl: j['media_url'] as String?,
       );
 }
 

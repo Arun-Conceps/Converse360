@@ -49,3 +49,4 @@ app.*.map.json
 
 # local config with keys
 env.json
+env.phone.json

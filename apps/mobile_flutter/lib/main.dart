@@ -6,6 +6,7 @@ import 'core/config.dart';
 import 'core/secure_storage.dart';
 import 'core/theme.dart';
 import 'router.dart';
+import 'screens/lock_gate.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -15,7 +16,7 @@ Future<void> main() async {
   }
   await Supabase.initialize(
     url: Config.supabaseUrl,
-    anonKey: Config.supabaseAnonKey,
+    publishableKey: Config.supabaseAnonKey,
     authOptions: FlutterAuthClientOptions(localStorage: SecureSessionStorage()),
   );
   runApp(const ProviderScope(child: ConverseApp()));
@@ -29,6 +30,7 @@ class ConverseApp extends ConsumerWidget {
         theme: buildTheme(),
         routerConfig: ref.watch(routerProvider),
         debugShowCheckedModeBanner: false,
+        builder: (_, child) => LockGate(child: child ?? const SizedBox.shrink()),
       );
 }
 

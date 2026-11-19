@@ -16,13 +16,20 @@ import 'screens/send_screen.dart';
 import 'screens/shell.dart';
 import 'screens/sign_in_screen.dart';
 import 'screens/status_screens.dart';
+import 'screens/workspace_tools_screen.dart';
 import 'state/auth.dart';
 
 /// The auth state machine decides where the user may be; screens never
 /// navigate on auth changes themselves.
+/// Keeps the branded splash up for a beat even when the session resolves
+/// instantly (signed out = no network call), so it is seen rather than flashed.
+final splashHoldProvider = FutureProvider<void>(
+    (_) => Future<void>.delayed(const Duration(milliseconds: 1600)));
+
 final routerProvider = Provider<GoRouter>((ref) {
   final refresh = ValueNotifier<int>(0);
   ref.listen(authProvider, (_, _) => refresh.value++);
+  ref.listen(splashHoldProvider, (_, _) => refresh.value++);
   ref.onDispose(refresh.dispose);
 
   return GoRouter(
@@ -32,6 +39,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       final a = ref.read(authProvider);
       final loc = state.matchedLocation;
       String? only(String path) => loc == path ? null : path;
+      if (!ref.read(splashHoldProvider).hasValue) return only('/splash');
       switch (a.status) {
         case AuthStatus.loading:
           return only('/splash');
@@ -63,6 +71,11 @@ final routerProvider = Provider<GoRouter>((ref) {
           path: '/select-workspace',
           builder: (_, _) => const SelectWorkspaceScreen()),
       GoRoute(path: '/deals', builder: (_, _) => const DealsScreen()),
+      GoRoute(
+        path: '/tools',
+        builder: (_, s) => WorkspaceToolsScreen(
+            initialTab: int.tryParse(s.uri.queryParameters['tab'] ?? '') ?? 0),
+      ),
       GoRoute(
           path: '/notifications',
           builder: (_, _) => const NotificationsScreen()),

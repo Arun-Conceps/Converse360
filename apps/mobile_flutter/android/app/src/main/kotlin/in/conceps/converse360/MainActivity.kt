@@ -1,5 +1,6 @@
 package `in`.conceps.converse360
 
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 
-class MainActivity : FlutterActivity()
+// local_auth shows its prompt through a FragmentActivity.
+class MainActivity : FlutterFragmentActivity()

@@ -6,13 +6,50 @@ import 'package:url_launcher/url_launcher.dart';
 import '../core/config.dart';
 import '../core/theme.dart';
 import '../state/auth.dart';
+import '../ui/brand.dart';
 import '../ui/widgets.dart';
 
+/// Shown while the session and workspaces resolve: the FULL Converse360 logo,
+/// centred on white (the native launch screen is plain white on Android 12+,
+/// which masks splash icons to a circle and would crop a wide wordmark).
 class SplashScreen extends StatelessWidget {
   const SplashScreen({super.key});
   @override
-  Widget build(BuildContext context) =>
-      const Scaffold(body: Center(child: CircularProgressIndicator()));
+  Widget build(BuildContext context) {
+    final w = (MediaQuery.sizeOf(context).width * 0.78).clamp(220.0, 340.0);
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: Center(
+        child: TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0, end: 1),
+          duration: const Duration(milliseconds: 500),
+          curve: Curves.easeOut,
+          builder: (_, t, child) => Opacity(
+            opacity: t,
+            child: Transform.scale(scale: 0.96 + 0.04 * t, child: child),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            spacing: 28,
+            children: [
+              BrandWordmark(width: w),
+              SizedBox(
+                width: 84,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(2),
+                  child: const LinearProgressIndicator(
+                    minHeight: 3,
+                    color: C.accent,
+                    backgroundColor: C.accentSoft,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class ErrorScreen extends ConsumerWidget {

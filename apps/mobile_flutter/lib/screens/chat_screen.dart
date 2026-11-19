@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../core/inbox_logic.dart';
+import '../core/media_send.dart';
 import '../core/mentions.dart';
 import '../core/models.dart';
 import '../core/models_more.dart';
@@ -130,6 +132,61 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// Pick -> upload to chat-media -> send. The text box, if filled, becomes the
+  /// caption (documents and images only; Meta rejects it on audio).
+  Future<void> _attach(Conversation c, MediaSource source) async {
+    final accountId = ref.read(accountIdProvider);
+    if (accountId == null) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final media = await pickAndUploadMedia(source, accountId);
+      if (media == null) return;
+      final caption = _text.text.trim();
+      await ref.read(apiProvider).request('POST', sendPath[c.channel]!, body: {
+        'conversation_id': _id,
+        'message_type': media.kind,
+        'media_url': media.url,
+        if (media.kind == 'document') 'filename': media.fileName,
+        if (caption.isNotEmpty &&
+            (media.kind == 'image' || media.kind == 'document'))
+          'content_text': caption,
+      });
+      ref.invalidate(messagesProvider(_id));
+      _text.clear();
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _attachSheet(Conversation c) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          for (final o in const [
+            (Icons.photo_library_outlined, 'Photo from gallery', MediaSource.gallery),
+            (Icons.photo_camera_outlined, 'Take a photo', MediaSource.camera),
+            (Icons.insert_drive_file_outlined, 'Document', MediaSource.document),
+          ])
+            ListTile(
+              leading: Icon(o.$1, color: C.accent),
+              title: Text(o.$2),
+              onTap: () {
+                Navigator.pop(ctx);
+                _attach(c, o.$3);
+              },
+            ),
+        ]),
+      ),
+    );
   }
 
   Future<void> _setStatus(String status) async {
@@ -369,6 +426,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     ),
                 ]),
                 Row(spacing: 6, crossAxisAlignment: CrossAxisAlignment.end, children: [
+                  if (_mode == _Mode.reply)
+                    IconButton(
+                      tooltip: 'Attach',
+                      onPressed: !inputEnabled || _busy || c == null
+                          ? null
+                          : () => _attachSheet(c),
+                      icon: const Icon(Icons.attach_file, color: C.muted),
+                    ),
                   Expanded(
                     child: TextField(
                       controller: _text,
@@ -450,6 +515,34 @@ class _Bubble extends StatelessWidget {
             border: mine ? null : Border.all(color: C.line),
           ),
           child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            if (m.mediaUrl != null && m.mediaUrl!.startsWith('https://')) ...[
+              if (m.contentType == 'image')
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.network(m.mediaUrl!,
+                        width: 220,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => const Text('Image unavailable',
+                            style: TextStyle(color: C.muted))),
+                  ),
+                )
+              else
+                InkWell(
+                  onTap: () => launchUrl(Uri.parse(m.mediaUrl!),
+                      mode: LaunchMode.externalApplication),
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Row(mainAxisSize: MainAxisSize.min, spacing: 6, children: [
+                      const Icon(Icons.attach_file, size: 16, color: C.accent),
+                      Text('Open ${m.contentType}',
+                          style: const TextStyle(
+                              color: C.accent, decoration: TextDecoration.underline)),
+                    ]),
+                  ),
+                ),
+            ],
             Align(alignment: Alignment.centerLeft, child: Text(_preview(m))),
             Text(
               '${m.senderType == 'bot' ? 'AI agent · ' : ''}${DateFormat.jm().format(m.createdAt.toLocal())} ${_tick(m)}',

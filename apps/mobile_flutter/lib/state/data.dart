@@ -94,7 +94,7 @@ final messagesProvider =
   final rows = await sb
       .from('messages')
       .select(
-          'id, sender_type, content_type, content_text, template_name, status, created_at')
+          'id, sender_type, content_type, content_text, template_name, media_url, status, created_at')
       .eq('conversation_id', id)
       .order('created_at', ascending: false)
       .limit(100);

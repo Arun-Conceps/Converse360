@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../core/config.dart';
 import '../core/theme.dart';
+import '../state/app_lock.dart';
 import '../state/auth.dart';
 import '../ui/widgets.dart';
 
@@ -57,6 +58,9 @@ class MoreScreen extends ConsumerWidget {
           (Icons.view_kanban_outlined, 'Deals', 'Pipeline board', '/deals'),
           (Icons.notifications_none, 'Notifications', 'Assignments and @mentions', '/notifications'),
           (Icons.bolt_outlined, 'Quick replies', 'Saved replies for the / shortcut', '/quick-replies'),
+          (Icons.groups_2_outlined, 'Segments', 'Named audiences', '/tools?tab=0'),
+          (Icons.account_tree_outlined, 'Automations & flows', 'What is running, and how often', '/tools?tab=1'),
+          (Icons.smart_toy_outlined, 'AI agents', 'Status, mode and channels', '/tools?tab=3'),
         ])
           ListTile(
             tileColor: C.surface,
@@ -66,6 +70,22 @@ class MoreScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push(r.$4),
           ),
+        SwitchListTile(
+          tileColor: C.surface,
+          secondary: const Icon(Icons.fingerprint, color: C.accent),
+          title: const Text('App lock', style: TextStyle(fontWeight: FontWeight.w600)),
+          subtitle: const Text('Ask for fingerprint, face or screen lock'),
+          value: ref.watch(appLockProvider).enabled,
+          onChanged: (on) async {
+            final ok = await ref.read(appLockProvider.notifier).setEnabled(on);
+            if (!ok && context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text(on
+                      ? 'Set up a fingerprint or screen lock on this phone first.'
+                      : 'Could not confirm it is you.')));
+            }
+          },
+        ),
         const SizedBox(height: 12),
         AppButton('Open the web dashboard',
             onPressed: () => launchUrl(Uri.parse(Config.webUrl),
