@@ -16,6 +16,7 @@ import {
   AuthShell,
 } from "@/components/auth/auth-shell";
 import { GoogleSignInButton } from "@/components/auth/google-sign-in-button";
+import { QrLoginPanel } from "@/components/auth/qr-login-panel";
 
 // `useSearchParams` opts a component out of static prerendering unless
 // it sits under a Suspense boundary. Only the form reads it, so only
@@ -47,6 +48,7 @@ function LoginForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [mode, setMode] = useState<"password" | "qr">("password");
   const router = useRouter();
   const supabase = createClient();
 
@@ -87,6 +89,23 @@ function LoginForm() {
         </p>
       </div>
 
+      {mode === "qr" ? (
+        <div className="flex flex-col gap-4">
+          {error ? <AuthFormError message={error} /> : null}
+          <QrLoginPanel destination={destination} onError={setError} />
+          <Button
+            variant="ghost"
+            className="h-10 w-full"
+            onClick={() => {
+              setError(null);
+              setMode("password");
+            }}
+          >
+            Use email and password instead
+          </Button>
+        </div>
+      ) : (
+      <>
       <form onSubmit={handleLogin} className="flex flex-col gap-4">
         {error ? <AuthFormError message={error} /> : null}
 
@@ -138,6 +157,20 @@ function LoginForm() {
         label={t("continueWithGoogle")}
         onError={setError}
       />
+
+      <Button
+        type="button"
+        variant="outline"
+        className="h-10 w-full"
+        onClick={() => {
+          setError(null);
+          setMode("qr");
+        }}
+      >
+        Sign in with phone (scan QR)
+      </Button>
+      </>
+      )}
 
       <p className="text-center text-sm text-muted-foreground">
         {t("noAccount")}{" "}

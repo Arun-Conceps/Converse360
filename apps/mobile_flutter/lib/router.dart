@@ -14,6 +14,7 @@ import 'screens/more_screen.dart';
 import 'screens/select_workspace_screen.dart';
 import 'screens/send_screen.dart';
 import 'screens/shell.dart';
+import 'screens/scan_qr_screen.dart';
 import 'screens/sign_in_screen.dart';
 import 'screens/status_screens.dart';
 import 'screens/workspace_tools_screen.dart';
@@ -70,6 +71,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
           path: '/select-workspace',
           builder: (_, _) => const SelectWorkspaceScreen()),
+      GoRoute(path: '/scan-qr', builder: (_, _) => const ScanQrScreen()),
       GoRoute(path: '/deals', builder: (_, _) => const DealsScreen()),
       GoRoute(
         path: '/tools',

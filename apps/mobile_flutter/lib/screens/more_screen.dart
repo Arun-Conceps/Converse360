@@ -131,6 +131,12 @@ class MoreScreen extends ConsumerWidget {
             _Group(
               children: [
                 _Row(
+                  icon: Icons.qr_code_scanner,
+                  title: 'Scan QR to sign in on web',
+                  subtitle: 'Log the web dashboard in as this account',
+                  onTap: () => context.push('/scan-qr'),
+                ),
+                _Row(
                   icon: Icons.open_in_new,
                   title: 'Open the web dashboard',
                   subtitle: 'Full settings, billing and reports',

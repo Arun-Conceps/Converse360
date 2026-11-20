@@ -152,6 +152,13 @@ const nextConfig: NextConfig = {
           destination: `${nestApiUrl}/flows/:path*`,
         },
         { source: '/api/v1/:path*', destination: `${nestApiUrl}/v1/:path*` },
+        // QR sign-in: the browser asking is not signed in yet, so these live
+        // under the middleware's public `/api/public/` prefix. `approve` is
+        // NOT exposed here — the phone calls the API directly with its Bearer.
+        {
+          source: '/api/public/qr-login/:path(start|status)',
+          destination: `${nestApiUrl}/auth/qr/:path`,
+        },
         {
           source: '/api/whatsapp/:path*',
           destination: `${nestApiUrl}/whatsapp/:path*`,
