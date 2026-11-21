@@ -21,6 +21,7 @@ import {
   type AudienceConfig,
   type VariableMapping,
 } from '../services/dashboard-broadcast.service';
+import { BroadcastScheduleService } from '../queues/broadcast-schedule.service';
 
 /**
  * Dashboard broadcast endpoints (the New Broadcast wizard):
@@ -40,6 +41,7 @@ export class WhatsappBroadcastsController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly broadcasts: DashboardBroadcastService,
+    private readonly schedule: BroadcastScheduleService,
   ) {}
 
   @Post('broadcasts')
@@ -63,13 +65,14 @@ export class WhatsappBroadcastsController {
         address?: string;
       };
       button_params?: Record<string, string>;
+      /** ISO-8601 instant. Omit to send now. */
+      scheduled_at?: string | null;
     },
     @Res() res: Response,
   ) {
-    const { id, totalRecipients } = await this.broadcasts.createAndQueue(
-      account.accountId,
-      account.userId,
-      {
+    const scheduledAt = body?.scheduled_at ? new Date(body.scheduled_at) : null;
+    const { id, totalRecipients, status } =
+      await this.broadcasts.createAndQueue(account.accountId, account.userId, {
         name: body?.name ?? '',
         templateName: body?.template_name ?? '',
         templateLanguage: body?.template_language ?? null,
@@ -79,16 +82,33 @@ export class WhatsappBroadcastsController {
         headerText: body?.header_text ?? null,
         headerLocation: body?.header_location ?? null,
         buttonParams: body?.button_params ?? null,
-      },
-    );
+        scheduledAt,
+      });
 
     // 'queued' matches what was actually written: the recipients exist
     // and the orchestrator has the broadcast, but nothing has been sent.
     return res.status(HttpStatus.ACCEPTED).json({
       id,
-      status: 'queued',
+      status,
       total_recipients: totalRecipients,
     });
+  }
+
+  /** POST /whatsapp/broadcasts/:id/cancel - only while still 'scheduled'. */
+  @Post('broadcasts/:id/cancel')
+  @RequireRole('agent')
+  async cancel(
+    @CurrentAccount() account: SupabaseAccountContext,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    const ok = await this.schedule.cancel(account.accountId, id);
+    if (!ok) {
+      return res.status(HttpStatus.CONFLICT).json({
+        error: 'Only a broadcast that has not started can be cancelled.',
+      });
+    }
+    return res.status(HttpStatus.OK).json({ id, status: 'cancelled' });
   }
 
   @Get('broadcasts/:id')

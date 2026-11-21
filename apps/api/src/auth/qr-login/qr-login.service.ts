@@ -158,8 +158,7 @@ export class QrLoginService {
       this.log.warn(`generate_link failed: ${g.status}`);
       throw new ServiceUnavailableException('Could not start the session.');
     }
-    const hashed = ((await g.json()) as { hashed_token?: string })
-      .hashed_token;
+    const hashed = ((await g.json()) as { hashed_token?: string }).hashed_token;
     if (!hashed)
       throw new ServiceUnavailableException('Could not start the session.');
     return hashed;

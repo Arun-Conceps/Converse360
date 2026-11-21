@@ -29,7 +29,8 @@ interface Step4Props {
   onNameChange: (name: string) => void;
   template: MessageTemplate;
   audience: AudienceConfig;
-  onSend: () => void;
+  /** ISO instant when scheduled; undefined = send now. */
+  onSend: (scheduledAt?: string) => void;
   onSaveDraft?: () => void;
   onBack: () => void;
   isProcessing: boolean;
@@ -51,6 +52,23 @@ export function Step4ScheduleSend({
   const [showConfirm, setShowConfirm] = useState(false);
   const [estimatedReach, setEstimatedReach] = useState<number>(0);
   const [loadingReach, setLoadingReach] = useState(true);
+  // 'datetime-local' value ("2026-11-21T10:30"), in the browser's zone.
+  const [later, setLater] = useState(false);
+  const [when, setWhen] = useState('');
+
+  const whenDate = later && when ? new Date(when) : null;
+  const leadMs = whenDate ? whenDate.getTime() - Date.now() : null;
+  const whenError =
+    !later
+      ? null
+      : !whenDate || Number.isNaN(whenDate.getTime())
+        ? 'Pick a date and time.'
+        : leadMs! < 60_000
+          ? 'Pick a time at least a minute from now.'
+          : leadMs! > 90 * 24 * 60 * 60 * 1000
+            ? 'Broadcasts can be scheduled up to 90 days ahead.'
+            : null;
+  const whenLabel = whenDate && !whenError ? whenDate.toLocaleString() : '';
 
   useEffect(() => {
     if (!accountId) return;
@@ -117,6 +135,44 @@ export function Step4ScheduleSend({
           placeholder="e.g. Summer Sale Announcement"
           className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
         />
+      </div>
+
+      {/* When */}
+      <div>
+        <label className="mb-1.5 block text-sm font-medium text-foreground">When</label>
+        <div className="flex gap-2">
+          {([false, true] as const).map((isLater) => (
+            <Button
+              key={String(isLater)}
+              type="button"
+              variant={later === isLater ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setLater(isLater)}
+              disabled={isProcessing}
+            >
+              {isLater ? 'Schedule for later' : 'Send now'}
+            </Button>
+          ))}
+        </div>
+        {later && (
+          <div className="mt-2 space-y-1">
+            <Input
+              type="datetime-local"
+              value={when}
+              onChange={(e) => setWhen(e.target.value)}
+              className="max-w-xs border-border bg-muted text-foreground"
+            />
+            {whenError && when ? (
+              <p className="text-xs text-accent-red">{whenError}</p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Uses your browser&apos;s time zone. The audience is fixed now; contacts who
+                reply STOP before it goes out are still skipped. You can cancel it from the
+                broadcast page until then.
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Summary Card */}
@@ -207,23 +263,31 @@ export function Step4ScheduleSend({
           <DialogTrigger
             render={
               <Button
-                disabled={!name.trim() || isProcessing}
+                disabled={!name.trim() || isProcessing || !!whenError}
                 className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               />
             }
           >
             <Send className="h-4 w-4" />
-            Send Broadcast
+            {later ? 'Schedule Broadcast' : 'Send Broadcast'}
           </DialogTrigger>
           <DialogContent className="border-border bg-popover sm:max-w-md">
             <DialogHeader>
               <DialogTitle className="text-popover-foreground">Confirm Broadcast</DialogTitle>
               <DialogDescription className="text-muted-foreground">
-                You are about to send this broadcast to{' '}
+                You are about to {later ? 'schedule' : 'send'} this broadcast to{' '}
                 <span className="font-medium text-popover-foreground">{estimatedReach.toLocaleString()}</span>{' '}
                 contacts using the{' '}
                 <span className="font-medium text-popover-foreground">{template.name}</span> template.
-                This action cannot be undone.
+                {later ? (
+                  <>
+                    {' '}It goes out{' '}
+                    <span className="font-medium text-popover-foreground">{whenLabel}</span>
+                    {' '}and can be cancelled until then.
+                  </>
+                ) : (
+                  ' This action cannot be undone.'
+                )}
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
@@ -237,12 +301,12 @@ export function Step4ScheduleSend({
               <Button
                 onClick={() => {
                   setShowConfirm(false);
-                  onSend();
+                  onSend(later && whenDate ? whenDate.toISOString() : undefined);
                 }}
                 className="bg-primary text-primary-foreground hover:bg-primary/90"
               >
                 <Send className="h-4 w-4" />
-                Confirm & Send
+                {later ? 'Confirm & Schedule' : 'Confirm & Send'}
               </Button>
             </DialogFooter>
           </DialogContent>

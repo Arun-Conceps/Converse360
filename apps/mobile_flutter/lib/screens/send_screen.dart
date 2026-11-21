@@ -1,16 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+import '../core/api.dart';
 import '../core/models_more.dart';
+import '../state/auth.dart';
 import '../core/theme.dart';
 import '../state/data_more.dart';
 import '../ui/widgets.dart';
 
-/// Broadcast reports and the template list (spec 3.5).
+/// Broadcast reports, the template list, and "New broadcast" (spec 3.5).
 ///
-/// READ-ONLY on purpose: creating or scheduling a broadcast ships together with
-/// opt-out handling (spec 3.4), so nobody who said STOP can be messaged.
+/// Creating a broadcast shipped together with opt-out handling (spec 3.4,
+/// migration 102): contacts who replied STOP are skipped by the API on every
+/// audience, so nothing on the phone can message them. A broadcast can be
+/// scheduled (migration 103); until it goes out it can be cancelled from its
+/// report sheet.
 class SendScreen extends ConsumerStatefulWidget {
   const SendScreen({super.key});
   @override
@@ -30,6 +36,11 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Send'), titleSpacing: 16),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => context.push('/broadcasts/new'),
+        icon: const Icon(Icons.campaign_outlined),
+        label: const Text('New broadcast'),
+      ),
       body: MaxWidth(
         child: Column(
           children: [
@@ -58,7 +69,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
           ? const _Empty(
               icon: Icons.campaign_outlined,
               title: 'No broadcasts yet',
-              hint: 'Broadcasts you send from the web show their results here.',
+              hint: 'Tap New broadcast to send one. Results show here.',
             )
           : RefreshIndicator(
               onRefresh: () async => ref.refresh(broadcastsProvider.future),
@@ -71,6 +82,48 @@ class _SendScreenState extends ConsumerState<SendScreen> {
               ),
             ),
     );
+  }
+
+  Future<void> _cancel(Broadcast x) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cancel this broadcast?'),
+        content: Text('"${x.name}" will not be sent.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep it'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Cancel broadcast'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await ref
+          .read(apiProvider)
+          .request('POST', '/whatsapp/broadcasts/${x.id}/cancel');
+      ref.invalidate(broadcastsProvider);
+      if (!mounted) return;
+      Navigator.of(context).maybePop(); // close the report sheet
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Broadcast cancelled.')));
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not reach the server.')),
+        );
+      }
+    }
   }
 
   void _report(Broadcast x) {
@@ -150,6 +203,12 @@ class _SendScreenState extends ConsumerState<SendScreen> {
               stat(Icons.reply_outlined, 'Replied', x.replied, of: x.sent),
             ],
           ),
+          if (x.status == 'scheduled')
+            AppButton(
+              'Cancel scheduled broadcast',
+              danger: true,
+              onPressed: () => _cancel(x),
+            ),
           if (x.failed > 0)
             Container(
               width: double.infinity,

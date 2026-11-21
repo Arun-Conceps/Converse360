@@ -1405,6 +1405,11 @@ model contacts {
   /// Legal values live in contacts_source_chk (migration 056) and are
   /// mirrored in src/common/contacts/contact-source.ts.
   source                      String                          @default("unknown")
+  /// Marketing opt-out (migration 102). NULL = never opted out. Broadcasts
+  /// exclude these; one-to-one inbox replies deliberately do not.
+  opted_out_at                DateTime?                       @db.Timestamptz(6)
+  /// keyword | manual | api — set and cleared together with opted_out_at.
+  opt_out_source              String?
   automationLogs              AutomationLog[]
   automationPendingExecutions AutomationPendingExecution[]
   broadcast_recipients        broadcast_recipients[]

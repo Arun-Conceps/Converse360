@@ -14,6 +14,7 @@ import 'screens/more_screen.dart';
 import 'screens/select_workspace_screen.dart';
 import 'screens/send_screen.dart';
 import 'screens/shell.dart';
+import 'screens/new_broadcast_screen.dart';
 import 'screens/scan_qr_screen.dart';
 import 'screens/sign_in_screen.dart';
 import 'screens/status_screens.dart';
@@ -25,7 +26,8 @@ import 'state/auth.dart';
 /// Keeps the branded splash up for a beat even when the session resolves
 /// instantly (signed out = no network call), so it is seen rather than flashed.
 final splashHoldProvider = FutureProvider<void>(
-    (_) => Future<void>.delayed(const Duration(milliseconds: 1600)));
+  (_) => Future<void>.delayed(const Duration(milliseconds: 1600)),
+);
 
 final routerProvider = Provider<GoRouter>((ref) {
   final refresh = ValueNotifier<int>(0);
@@ -69,21 +71,29 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/error', builder: (_, _) => const ErrorScreen()),
       GoRoute(path: '/lapsed', builder: (_, _) => const LapsedScreen()),
       GoRoute(
-          path: '/select-workspace',
-          builder: (_, _) => const SelectWorkspaceScreen()),
+        path: '/select-workspace',
+        builder: (_, _) => const SelectWorkspaceScreen(),
+      ),
+      GoRoute(
+        path: '/broadcasts/new',
+        builder: (_, _) => const NewBroadcastScreen(),
+      ),
       GoRoute(path: '/scan-qr', builder: (_, _) => const ScanQrScreen()),
       GoRoute(path: '/deals', builder: (_, _) => const DealsScreen()),
       GoRoute(
         path: '/tools',
         builder: (_, s) => WorkspaceToolsScreen(
-            initialTab: int.tryParse(s.uri.queryParameters['tab'] ?? '') ?? 0),
+          initialTab: int.tryParse(s.uri.queryParameters['tab'] ?? '') ?? 0,
+        ),
       ),
       GoRoute(
-          path: '/notifications',
-          builder: (_, _) => const NotificationsScreen()),
+        path: '/notifications',
+        builder: (_, _) => const NotificationsScreen(),
+      ),
       GoRoute(
-          path: '/quick-replies',
-          builder: (_, _) => const QuickRepliesScreen()),
+        path: '/quick-replies',
+        builder: (_, _) => const QuickRepliesScreen(),
+      ),
       GoRoute(
         path: '/contact/:id',
         builder: (_, s) => ContactScreen(contactId: s.pathParameters['id']!),
@@ -95,22 +105,34 @@ final routerProvider = Provider<GoRouter>((ref) {
       StatefulShellRoute.indexedStack(
         builder: (_, _, shell) => AppShell(shell: shell),
         branches: [
-          StatefulShellBranch(routes: [
-            GoRoute(path: '/home', builder: (_, _) => const HomeScreen())
-          ]),
-          StatefulShellBranch(routes: [
-            GoRoute(path: '/inbox', builder: (_, _) => const InboxScreen())
-          ]),
-          StatefulShellBranch(routes: [
-            GoRoute(
-                path: '/contacts', builder: (_, _) => const ContactsScreen())
-          ]),
-          StatefulShellBranch(routes: [
-            GoRoute(path: '/send', builder: (_, _) => const SendScreen())
-          ]),
-          StatefulShellBranch(routes: [
-            GoRoute(path: '/more', builder: (_, _) => const MoreScreen())
-          ]),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(path: '/home', builder: (_, _) => const HomeScreen()),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(path: '/inbox', builder: (_, _) => const InboxScreen()),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/contacts',
+                builder: (_, _) => const ContactsScreen(),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(path: '/send', builder: (_, _) => const SendScreen()),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(path: '/more', builder: (_, _) => const MoreScreen()),
+            ],
+          ),
         ],
       ),
     ],

@@ -56,7 +56,7 @@ export default function NewBroadcastPage() {
   );
   const [name, setName] = useState('');
 
-  async function handleSend() {
+  async function handleSend(scheduledAt?: string) {
     if (!template) return;
 
     try {
@@ -77,7 +77,9 @@ export default function NewBroadcastPage() {
         headerText: extras.headerText,
         headerLocation: extras.headerLocation,
         buttonParams: extras.buttonParams,
+        scheduledAt,
       });
+      if (scheduledAt) toast.success('Broadcast scheduled');
       router.push(`/broadcasts/${broadcastId}`);
     } catch (err) {
       // Previously swallowed with console.error — the wizard would

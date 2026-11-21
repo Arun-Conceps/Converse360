@@ -2,6 +2,7 @@ import { Injectable, HttpStatus } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { sanitizePhoneForMeta, isValidE164 } from '../utils/phone.util';
 import { findOrCreateContact } from '../utils/contacts.util';
+import { optedOutIds } from '../../common/contacts/contact-opt-out';
 import { ApiError } from '../utils/respond.util';
 import { WebhookDeliverService } from './webhook-deliver.service';
 import { BroadcastQueueService } from '../../queue/broadcast-queue.service';
@@ -150,16 +151,27 @@ export class BroadcastSendService {
     }
 
     const seenContact = new Set<string>();
-    const deduped = resolved.filter((r) => {
+    const uniqueContacts = resolved.filter((r) => {
       if (seenContact.has(r.contactId)) return false;
       seenContact.add(r.contactId);
       return true;
     });
 
+    // Opted-out contacts (migration 102) are skipped, not errored: a partner
+    // sending a list should not fail wholesale because one person said STOP.
+    const optedOut = await optedOutIds(
+      this.prisma,
+      accountId,
+      uniqueContacts.map((r) => r.contactId),
+    );
+    const deduped = uniqueContacts.filter((r) => !optedOut.has(r.contactId));
+
     if (deduped.length === 0) {
       throw new ApiError(
         'bad_request',
-        'No recipients had a valid E.164 phone number',
+        optedOut.size > 0 && uniqueContacts.length > 0
+          ? 'Every recipient has opted out of marketing messages'
+          : 'No recipients had a valid E.164 phone number',
         HttpStatus.BAD_REQUEST,
       );
     }

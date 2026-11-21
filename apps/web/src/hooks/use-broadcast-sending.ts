@@ -48,6 +48,8 @@ interface BroadcastPayload {
     address?: string;
   };
   buttonParams?: Record<string, string>;
+  /** ISO-8601 instant. Omit to send now. The server validates the range. */
+  scheduledAt?: string;
 }
 
 interface UseBroadcastSendingReturn {
@@ -114,6 +116,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
             payload.buttonParams && Object.keys(payload.buttonParams).length > 0
               ? payload.buttonParams
               : undefined,
+          scheduled_at: payload.scheduledAt || undefined,
         }),
       });
 

@@ -159,6 +159,7 @@ export default function BroadcastDetailPage() {
   );
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [exporting, setExporting] = useState(false);
 
   const fetchBroadcast = useCallback(async () => {
@@ -282,6 +283,23 @@ export default function BroadcastDetailPage() {
     }
   }
 
+  async function handleCancelScheduled() {
+    setCancelling(true);
+    try {
+      const res = await fetch(`/api/whatsapp/broadcasts/${broadcastId}/cancel`, {
+        method: 'POST',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Could not cancel');
+      toast.success('Broadcast cancelled');
+      await fetchBroadcast();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not cancel');
+    } finally {
+      setCancelling(false);
+    }
+  }
+
   async function handleDelete() {
     setDeleting(true);
     const supabase = createClient();
@@ -358,9 +376,29 @@ export default function BroadcastDetailPage() {
               <span>
                 Created {new Date(broadcast.created_at).toLocaleDateString()}
               </span>
+              {broadcast.status === 'scheduled' && broadcast.scheduled_at && (
+                <>
+                  <span>-</span>
+                  <span className="font-medium text-foreground">
+                    Goes out {new Date(broadcast.scheduled_at).toLocaleString()}
+                  </span>
+                </>
+              )}
             </div>
           </div>
         </div>
+
+        {broadcast.status === 'scheduled' && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleCancelScheduled}
+            disabled={cancelling}
+            className="border-border"
+          >
+            {cancelling ? 'Cancelling…' : 'Cancel schedule'}
+          </Button>
+        )}
 
         {/* Delete — inline-confirm pattern matches the pipeline-settings
             "Delete Pipeline" flow. Mid-send broadcasts can't be deleted

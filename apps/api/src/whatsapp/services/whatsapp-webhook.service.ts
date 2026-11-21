@@ -43,6 +43,10 @@ import {
 } from '../utils/limit-webhook.util';
 import { resolveTierLimit, isKnownTier } from './messaging-limits.service';
 import { getMediaUrl } from '../meta-api.util';
+import {
+  applyOptKeyword,
+  classifyOptKeyword,
+} from '../../common/contacts/contact-opt-out';
 
 interface WhatsAppMessage {
   id: string;
@@ -901,6 +905,31 @@ export class WhatsappWebhookService {
     void this.flagBroadcastReplyIfAny(accountId, contactRecord.id);
 
     const inboundText = parsedContent.contentText ?? message.text?.body ?? '';
+
+    // STOP / START keywords flip the marketing opt-out. Text messages only:
+    // a button label or an interactive reply is not a typed keyword.
+    if (message.type === 'text') {
+      const kind = classifyOptKeyword(inboundText);
+      if (kind) {
+        try {
+          const changed = await applyOptKeyword(
+            this.prisma,
+            accountId,
+            contactRecord.id,
+            kind,
+          );
+          if (changed) {
+            this.logger.log(
+              `contact ${contactRecord.id} ${kind === 'opt_out' ? 'opted out of' : 'opted back in to'} marketing`,
+            );
+          }
+        } catch (err) {
+          // Never let this break message handling, but say so: a STOP that
+          // did not stick is a complaint waiting to happen.
+          this.logger.error(`opt-out keyword not applied: ${err}`);
+        }
+      }
+    }
     let flowConsumed = false;
 
     // Dispatch Flows Engine directly

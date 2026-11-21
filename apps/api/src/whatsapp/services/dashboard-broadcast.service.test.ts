@@ -36,7 +36,14 @@ function makePrismaMock() {
       }),
     },
     contacts: {
-      findMany: vi.fn().mockResolvedValue([CONTACT]),
+      // Audience lookups return the rows; the opt-out lookup (migration 102,
+      // `where.opted_out_at`) returns nobody unless a test says otherwise.
+      findMany: vi
+        .fn()
+        .mockImplementation(
+          async (args: { where?: { opted_out_at?: unknown } }) =>
+            args?.where?.opted_out_at ? [] : [CONTACT],
+        ),
       create: vi.fn(),
     },
     contact_tags: { findMany: vi.fn().mockResolvedValue([]) },
@@ -229,7 +236,11 @@ describe('DashboardBroadcastService.createAndQueue', () => {
       headerMediaUrl: ' https://x.test/img.png ',
     });
 
-    expect(result).toEqual({ id: 'b-1', totalRecipients: 1 });
+    expect(result).toEqual({
+      id: 'b-1',
+      totalRecipients: 1,
+      status: 'queued',
+    });
     expect(prisma.broadcasts.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -368,10 +379,12 @@ describe('DashboardBroadcastService.createAndQueue', () => {
     // "Everyone except last month's buyers" is the shape most
     // suppression lists take, so exclusion is deliberately independent
     // of how the base audience was chosen.
-    prisma.contacts.findMany.mockResolvedValue([
-      CONTACT,
-      { ...CONTACT, id: 'c-2', phone: '+919999999999' },
-    ]);
+    prisma.contacts.findMany.mockImplementation(
+      async (args: { where?: { opted_out_at?: unknown } }) =>
+        args?.where?.opted_out_at
+          ? []
+          : [CONTACT, { ...CONTACT, id: 'c-2', phone: '+919999999999' }],
+    );
     segments.resolveMany.mockResolvedValue(['c-2']);
 
     const result = await service.createAndQueue('acc-1', 'u-1', {
@@ -381,6 +394,36 @@ describe('DashboardBroadcastService.createAndQueue', () => {
 
     expect(result.totalRecipients).toBe(1);
     expect(segments.resolveMany).toHaveBeenCalledWith('acc-1', ['seg-buyers']);
+  });
+
+  it('never sends marketing to a contact who opted out (migration 102)', async () => {
+    prisma.contacts.findMany.mockImplementation(
+      async (args: { where?: { opted_out_at?: unknown } }) =>
+        args?.where?.opted_out_at
+          ? [{ id: 'c-2' }]
+          : [CONTACT, { ...CONTACT, id: 'c-2', phone: '+919999999999' }],
+    );
+
+    const result = await service.createAndQueue('acc-1', 'u-1', basePayload);
+
+    expect(result.totalRecipients).toBe(1);
+    const data = prisma.broadcast_recipients.createMany.mock.calls[0][0].data;
+    expect(data.map((r: { contact_id: string }) => r.contact_id)).toEqual([
+      'c-1',
+    ]);
+  });
+
+  it('rejects an audience made up entirely of opted-out contacts', async () => {
+    prisma.contacts.findMany.mockImplementation(
+      async (args: { where?: { opted_out_at?: unknown } }) =>
+        args?.where?.opted_out_at ? [{ id: 'c-1' }] : [CONTACT],
+    );
+    await expect(
+      service.createAndQueue('acc-1', 'u-1', basePayload),
+    ).rejects.toMatchObject({
+      response: { error: 'No contacts found for this audience.' },
+    });
+    expect(prisma.broadcasts.create).not.toHaveBeenCalled();
   });
 
   it('records the segment ids on the broadcast for later inspection', async () => {
@@ -399,5 +442,51 @@ describe('DashboardBroadcastService.createAndQueue', () => {
         }),
       }),
     );
+  });
+  describe('scheduling', () => {
+    const inMinutes = (m: number) => new Date(Date.now() + m * 60_000);
+
+    it('stores a future broadcast as "scheduled" and does not enqueue it', async () => {
+      const at = inMinutes(120);
+      const result = await service.createAndQueue('acc-1', 'u-1', {
+        ...basePayload,
+        scheduledAt: at,
+      });
+      expect(result.status).toBe('scheduled');
+      expect(prisma.broadcasts.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: 'scheduled',
+            scheduled_at: at,
+          }),
+        }),
+      );
+      expect(queue.enqueueBroadcast).not.toHaveBeenCalled();
+    });
+
+    it('refuses a time in the past or under a minute away', async () => {
+      for (const at of [inMinutes(-5), inMinutes(0.2)]) {
+        await expect(
+          service.createAndQueue('acc-1', 'u-1', {
+            ...basePayload,
+            scheduledAt: at,
+          }),
+        ).rejects.toMatchObject({
+          response: { error: expect.stringContaining('a minute') },
+        });
+      }
+      expect(prisma.broadcasts.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses more than 90 days ahead', async () => {
+      await expect(
+        service.createAndQueue('acc-1', 'u-1', {
+          ...basePayload,
+          scheduledAt: inMinutes(91 * 24 * 60),
+        }),
+      ).rejects.toMatchObject({
+        response: { error: expect.stringContaining('90 days') },
+      });
+    });
   });
 });

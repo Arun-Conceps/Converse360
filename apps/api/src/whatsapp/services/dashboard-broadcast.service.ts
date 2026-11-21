@@ -9,6 +9,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { EntitlementService } from '../../subscription/services/entitlement.service';
 import { toE164 } from '../../v1/utils/phone.util';
 import { resolveAccountCountry } from '../../common/phone/account-country.util';
+import { excludeOptedOut } from '../../common/contacts/contact-opt-out';
 import { SegmentMembershipService } from '../../common/segments/segment-membership.service';
 import { BroadcastQueueService } from '../../queue/broadcast-queue.service';
 import {
@@ -66,7 +67,16 @@ export interface CreateDashboardBroadcastParams {
   } | null;
   /** Per-button substitution, keyed by the button's index. */
   buttonParams?: Record<string, string> | null;
+  /**
+   * When to send. Omitted/null = send now. Must be at least a minute away
+   * and no more than 90 days out; anything else is a 400 rather than a
+   * silent "send now", which would surprise somebody who picked 9am.
+   */
+  scheduledAt?: Date | null;
 }
+
+export const MIN_SCHEDULE_LEAD_MS = 60_000;
+export const MAX_SCHEDULE_AHEAD_MS = 90 * 24 * 60 * 60 * 1000;
 
 interface AudienceContact {
   id: string;
@@ -226,7 +236,11 @@ export class DashboardBroadcastService {
     accountId: string,
     userId: string,
     params: CreateDashboardBroadcastParams,
-  ): Promise<{ id: string; totalRecipients: number }> {
+  ): Promise<{
+    id: string;
+    totalRecipients: number;
+    status: 'queued' | 'scheduled';
+  }> {
     const {
       name,
       templateName,
@@ -238,6 +252,24 @@ export class DashboardBroadcastService {
       buttonParams,
     } = params;
     const templateLanguage = params.templateLanguage || 'en_US';
+
+    const scheduledAt = params.scheduledAt ?? null;
+    if (scheduledAt) {
+      const lead = scheduledAt.getTime() - Date.now();
+      if (Number.isNaN(lead)) {
+        throw new BadRequestException({ error: 'scheduled_at is not a date' });
+      }
+      if (lead < MIN_SCHEDULE_LEAD_MS) {
+        throw new BadRequestException({
+          error: 'Pick a time at least a minute from now.',
+        });
+      }
+      if (lead > MAX_SCHEDULE_AHEAD_MS) {
+        throw new BadRequestException({
+          error: 'Broadcasts can be scheduled up to 90 days ahead.',
+        });
+      }
+    }
 
     if (!templateName) {
       throw new BadRequestException({ error: 'template_name is required' });
@@ -327,7 +359,9 @@ export class DashboardBroadcastService {
         // 'queued', not 'sending': nothing has been sent yet, and with
         // fan-out there is a real interval between acceptance and the
         // first message. The orchestrator moves it to 'sending'.
-        status: 'queued',
+        // 'scheduled' waits for BroadcastScheduleService to release it.
+        status: scheduledAt ? 'scheduled' : 'queued',
+        scheduled_at: scheduledAt,
         total_recipients: contacts.length,
       },
       select: { id: true },
@@ -341,12 +375,17 @@ export class DashboardBroadcastService {
       })),
     });
 
-    await this.broadcastQueue.enqueueBroadcast(broadcast.id);
+    // A scheduled broadcast is released by the scheduler at its time.
+    if (!scheduledAt) await this.broadcastQueue.enqueueBroadcast(broadcast.id);
 
     // See the API path: counted at acceptance, not completion.
     await this.entitlements.recordUsage(accountId, 'broadcasts');
 
-    return { id: broadcast.id, totalRecipients: contacts.length };
+    return {
+      id: broadcast.id,
+      totalRecipients: contacts.length,
+      status: scheduledAt ? 'scheduled' : 'queued',
+    };
   }
 
   /** Resolve the wizard's audience config to concrete, account-scoped contacts. */
@@ -449,7 +488,13 @@ export class DashboardBroadcastService {
     // technically impossible and a fast route to app restriction.
     // Filtering here means one silent, correct exclusion instead of N
     // per-recipient send failures.
-    return contacts.filter((c): c is AudienceContact => Boolean(c.phone));
+    const withPhone = contacts.filter((c): c is AudienceContact =>
+      Boolean(c.phone),
+    );
+
+    // Honour opt-outs (migration 102) on EVERY audience type, CSV included —
+    // an uploaded list is exactly where somebody who said STOP reappears.
+    return excludeOptedOut(this.prisma, accountId, withPhone);
   }
 
   /**

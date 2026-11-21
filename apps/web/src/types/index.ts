@@ -680,7 +680,7 @@ export interface Deal {
  * "nothing has arrived" is the correct and expected state.
  */
 export type BroadcastStatus =
-  'draft' | 'queued' | 'scheduled' | 'sending' | 'sent' | 'failed';
+  'draft' | 'queued' | 'scheduled' | 'sending' | 'sent' | 'failed' | 'cancelled';
 export type RecipientStatus =
   'pending' | 'sent' | 'delivered' | 'read' | 'replied' | 'failed';
 

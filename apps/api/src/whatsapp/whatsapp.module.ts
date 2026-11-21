@@ -19,6 +19,7 @@ import { BroadcastSendProcessor } from './queues/broadcast-send.processor';
 import { BroadcastRecipientSendService } from './queues/broadcast-recipient-send.service';
 import { BroadcastFinalizeService } from './queues/broadcast-finalize.service';
 import { BroadcastRecoveryService } from './queues/broadcast-recovery.service';
+import { BroadcastScheduleService } from './queues/broadcast-schedule.service';
 import {
   MessagingLimitsService,
   LIMITS_QUEUE,
@@ -67,6 +68,7 @@ import { ConversationsModule } from '../common/conversations/conversations.modul
     BroadcastRecipientSendService,
     BroadcastFinalizeService,
     BroadcastRecoveryService,
+    BroadcastScheduleService,
     MessagingLimitsService,
     MessagingLimitsProcessor,
   ],
