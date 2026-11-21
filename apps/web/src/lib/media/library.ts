@@ -51,6 +51,108 @@ export interface MediaAsset {
   size_bytes: number;
   last_used_at: string | null;
   created_at: string;
+  /** Migration 104. NULL = not in a folder ("All files" only). */
+  folder_id: string | null;
+}
+
+/**
+ * A folder (migration 104). Flat, and an INDEX concept only: filing a file
+ * never moves its storage object, so URLs already in use stay valid.
+ */
+export interface MediaFolder {
+  id: string;
+  account_id: string;
+  name: string;
+  created_at: string;
+}
+
+export const FOLDER_NAME_MAX = 60;
+
+function cleanFolderName(name: string): string {
+  const clean = name.trim();
+  if (!clean) throw new Error('Folder name cannot be empty.');
+  if (clean.length > FOLDER_NAME_MAX) {
+    throw new Error(`Folder name is limited to ${FOLDER_NAME_MAX} characters.`);
+  }
+  return clean;
+}
+
+/** Postgres 23505 on the (account, lower(name)) index. */
+function folderError(error: { code?: string; message: string }): Error {
+  return new Error(
+    error.code === '23505'
+      ? 'A folder with that name already exists.'
+      : error.message
+  );
+}
+
+export async function listFolders(accountId: string): Promise<MediaFolder[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('media_folders')
+    .select('*')
+    .eq('account_id', accountId)
+    .order('name');
+  if (error) throw new Error(error.message);
+  return (data ?? []) as MediaFolder[];
+}
+
+export async function createFolder(
+  accountId: string,
+  name: string
+): Promise<MediaFolder> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('media_folders')
+    .insert({ account_id: accountId, name: cleanFolderName(name) })
+    .select()
+    .single();
+  if (error) throw folderError(error);
+  return data as MediaFolder;
+}
+
+export async function renameFolder(
+  accountId: string,
+  folderId: string,
+  name: string
+): Promise<void> {
+  const supabase = createClient();
+  const { error } = await supabase
+    .from('media_folders')
+    .update({ name: cleanFolderName(name) })
+    .eq('id', folderId)
+    .eq('account_id', accountId);
+  if (error) throw folderError(error);
+}
+
+/** Files inside fall back to "All files" (ON DELETE SET NULL) — never deleted. */
+export async function deleteFolder(
+  accountId: string,
+  folderId: string
+): Promise<void> {
+  const supabase = createClient();
+  const { error } = await supabase
+    .from('media_folders')
+    .delete()
+    .eq('id', folderId)
+    .eq('account_id', accountId);
+  if (error) throw new Error(error.message);
+}
+
+/** File assets into a folder, or out of every folder with `null`. */
+export async function moveAssets(
+  accountId: string,
+  assetIds: string[],
+  folderId: string | null
+): Promise<void> {
+  if (assetIds.length === 0) return;
+  const supabase = createClient();
+  const { error } = await supabase
+    .from('media_assets')
+    .update({ folder_id: folderId })
+    .eq('account_id', accountId)
+    .in('id', assetIds);
+  if (error) throw new Error(error.message);
 }
 
 /**
@@ -117,7 +219,8 @@ export async function listLibrary(accountId: string): Promise<MediaAsset[]> {
  */
 export async function uploadToLibrary(
   accountId: string,
-  file: File
+  file: File,
+  folderId: string | null = null
 ): Promise<MediaAsset> {
   if (file.size > LIBRARY_MAX_BYTES) {
     throw new Error(
@@ -152,6 +255,7 @@ export async function uploadToLibrary(
       kind: kindForMime(file.type),
       mime_type: file.type || null,
       size_bytes: file.size,
+      folder_id: folderId,
     })
     .select()
     .single();

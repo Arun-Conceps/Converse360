@@ -19,8 +19,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Check,
+  Folder,
+  FolderInput,
+  FolderPlus,
   FileText,
   Loader2,
+  Pencil,
   Music,
   Search,
   Trash2,
@@ -36,12 +41,18 @@ import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/use-auth';
 import {
   LIBRARY_SOFT_QUOTA_BYTES,
+  createFolder,
   deleteAsset,
+  deleteFolder,
   formatBytes,
+  listFolders,
   listLibrary,
+  moveAssets,
+  renameFolder,
   touchAsset,
   uploadToLibrary,
   type MediaAsset,
+  type MediaFolder,
   type MediaKind,
 } from '@/lib/media/library';
 
@@ -81,11 +92,26 @@ export function MediaLibrary({ onPick, accept, className }: MediaLibraryProps) {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
+  // Folders (migration 104). `null` = "All files". A file is in at most one
+  // folder, and also always appears under All files.
+  const [folders, setFolders] = useState<MediaFolder[]>([]);
+  const [folderId, setFolderId] = useState<string | null>(null);
+  const [folderEdit, setFolderEdit] = useState<{
+    mode: 'create' | 'rename';
+    value: string;
+  } | null>(null);
 
   const load = useCallback(async () => {
     if (!accountId) return;
     try {
-      setAssets(await listLibrary(accountId));
+      const [list, folderList] = await Promise.all([
+        listLibrary(accountId),
+        // Folders are an extra: a failure here (e.g. migration 104 not yet
+        // applied) must not take the whole library down with it.
+        listFolders(accountId).catch(() => [] as MediaFolder[]),
+      ]);
+      setAssets(list);
+      setFolders(folderList);
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Couldn't load your media."
@@ -109,9 +135,18 @@ export function MediaLibrary({ onPick, accept, className }: MediaLibraryProps) {
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return assets.filter(
-      (a) => a.kind === tab && (!q || a.filename.toLowerCase().includes(q))
+      (a) =>
+        a.kind === tab &&
+        (folderId === null || a.folder_id === folderId) &&
+        (!q || a.filename.toLowerCase().includes(q))
     );
-  }, [assets, tab, query]);
+  }, [assets, tab, query, folderId]);
+
+  const activeFolder = folders.find((f) => f.id === folderId) ?? null;
+  const folderCount = useCallback(
+    (id: string) => assets.filter((a) => a.folder_id === id).length,
+    [assets]
+  );
 
   const recent = useMemo(
     () =>
@@ -125,8 +160,11 @@ export function MediaLibrary({ onPick, accept, className }: MediaLibraryProps) {
   );
 
   const countFor = useCallback(
-    (kind: MediaKind) => assets.filter((a) => a.kind === kind).length,
-    [assets]
+    (kind: MediaKind) =>
+      assets.filter(
+        (a) => a.kind === kind && (folderId === null || a.folder_id === folderId)
+      ).length,
+    [assets, folderId]
   );
 
   async function handleFiles(files: FileList | null) {
@@ -139,7 +177,7 @@ export function MediaLibrary({ onPick, accept, className }: MediaLibraryProps) {
     let failed = 0;
     for (const file of Array.from(files)) {
       try {
-        const asset = await uploadToLibrary(accountId, file);
+        const asset = await uploadToLibrary(accountId, file, folderId);
         setAssets((prev) => [asset, ...prev]);
         // Land the user on the tab their file went to, so an upload is
         // never invisible because they were looking at "Audio".
@@ -178,6 +216,78 @@ export function MediaLibrary({ onPick, accept, className }: MediaLibraryProps) {
       }
     }
     setSelected([]);
+  }
+
+  async function submitFolder() {
+    if (!accountId || !folderEdit) return;
+    try {
+      if (folderEdit.mode === 'create') {
+        const f = await createFolder(accountId, folderEdit.value);
+        setFolders((prev) =>
+          [...prev, f].sort((a, b) => a.name.localeCompare(b.name))
+        );
+        setFolderId(f.id);
+      } else if (activeFolder) {
+        await renameFolder(accountId, activeFolder.id, folderEdit.value);
+        const name = folderEdit.value.trim();
+        setFolders((prev) =>
+          prev
+            .map((f) => (f.id === activeFolder.id ? { ...f, name } : f))
+            .sort((a, b) => a.name.localeCompare(b.name))
+        );
+      }
+      setFolderEdit(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Folder not saved.');
+    }
+  }
+
+  async function handleDeleteFolder() {
+    if (!accountId || !activeFolder) return;
+    const n = folderCount(activeFolder.id);
+    const ok = window.confirm(
+      `Delete the folder "${activeFolder.name}"? ${
+        n > 0
+          ? `Its ${n} file${n === 1 ? '' : 's'} will stay in All files.`
+          : 'It is empty.'
+      }`
+    );
+    if (!ok) return;
+    try {
+      await deleteFolder(accountId, activeFolder.id);
+      setFolders((prev) => prev.filter((f) => f.id !== activeFolder.id));
+      setAssets((prev) =>
+        prev.map((a) =>
+          a.folder_id === activeFolder.id ? { ...a, folder_id: null } : a
+        )
+      );
+      setFolderId(null);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't delete the folder."
+      );
+    }
+  }
+
+  async function handleMove(target: string) {
+    if (!accountId || selected.length === 0) return;
+    const dest = target === '' ? null : target;
+    try {
+      await moveAssets(accountId, selected, dest);
+      setAssets((prev) =>
+        prev.map((a) =>
+          selected.includes(a.id) ? { ...a, folder_id: dest } : a
+        )
+      );
+      toast.success(
+        dest
+          ? `Moved to "${folders.find((f) => f.id === dest)?.name ?? 'folder'}".`
+          : 'Removed from its folder.'
+      );
+      setSelected([]);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't move files.");
+    }
   }
 
   function choose(asset: MediaAsset) {
@@ -242,10 +352,121 @@ export function MediaLibrary({ onPick, accept, className }: MediaLibraryProps) {
           </Button>
         )}
 
+        {!onPick && selected.length > 0 && (
+          <label className="flex items-center gap-1.5">
+            <FolderInput className="text-muted-foreground h-3.5 w-3.5" />
+            <select
+              aria-label="Move selected files to folder"
+              value="__none__"
+              onChange={(e) => void handleMove(e.target.value)}
+              className="border-border bg-muted text-foreground h-8 rounded-md border px-2 text-xs"
+            >
+              <option value="__none__" disabled>
+                Move to…
+              </option>
+              <option value="">No folder</option>
+              {folders.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
         <span className="text-muted-foreground ml-auto text-xs">
           {formatBytes(totalBytes)} used of{' '}
           {formatBytes(LIBRARY_SOFT_QUOTA_BYTES)}
         </span>
+      </div>
+
+      {/* ---- folders ---- */}
+      <div
+        aria-label="Folders"
+        className="flex flex-wrap items-center gap-1.5 px-1 pb-3"
+      >
+        <FolderChip
+          active={folderId === null}
+          onClick={() => setFolderId(null)}
+          label={`All files (${assets.length})`}
+        />
+        {folders.map((f) => (
+          <FolderChip
+            key={f.id}
+            active={folderId === f.id}
+            onClick={() => setFolderId(f.id)}
+            label={`${f.name} (${folderCount(f.id)})`}
+            icon
+          />
+        ))}
+        {folderEdit ? (
+          <form
+            className="flex items-center gap-1"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void submitFolder();
+            }}
+          >
+            <Input
+              autoFocus
+              value={folderEdit.value}
+              maxLength={60}
+              onChange={(e) =>
+                setFolderEdit({ ...folderEdit, value: e.target.value })
+              }
+              onKeyDown={(e) => e.key === 'Escape' && setFolderEdit(null)}
+              placeholder="Folder name"
+              aria-label="Folder name"
+              className="bg-muted h-7 w-40 text-xs"
+            />
+            <Button type="submit" size="sm" className="h-7 px-2">
+              <Check className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2"
+              onClick={() => setFolderEdit(null)}
+              aria-label="Cancel"
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </form>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={() => setFolderEdit({ mode: 'create', value: '' })}
+              className="text-muted-foreground hover:text-foreground border-border flex items-center gap-1 rounded-full border border-dashed px-2.5 py-1 text-xs"
+            >
+              <FolderPlus className="h-3.5 w-3.5" />
+              New folder
+            </button>
+            {activeFolder && !onPick && (
+              <>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setFolderEdit({ mode: 'rename', value: activeFolder.name })
+                  }
+                  aria-label={`Rename ${activeFolder.name}`}
+                  className="text-muted-foreground hover:text-foreground p-1"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteFolder()}
+                  aria-label={`Delete folder ${activeFolder.name}`}
+                  className="text-muted-foreground hover:text-accent-red p-1"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </>
+            )}
+          </>
+        )}
       </div>
 
       {/* ---- kind tabs ---- */}
@@ -286,7 +507,7 @@ export function MediaLibrary({ onPick, accept, className }: MediaLibraryProps) {
           />
         ) : (
           <>
-            {recent.length > 0 && !query && (
+            {recent.length > 0 && !query && folderId === null && (
               <section className="mb-6">
                 <h3 className="text-muted-foreground mb-2 text-[11px] font-semibold tracking-wider uppercase">
                   Recently used ({recent.length})
@@ -374,6 +595,35 @@ function AssetGrid({
         </button>
       ))}
     </div>
+  );
+}
+
+function FolderChip({
+  active,
+  onClick,
+  label,
+  icon,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  icon?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        'flex max-w-[200px] items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
+        active
+          ? 'border-primary/30 bg-primary/10 text-primary'
+          : 'border-border bg-muted text-muted-foreground hover:text-foreground'
+      )}
+    >
+      {icon && <Folder className="h-3.5 w-3.5 shrink-0" />}
+      <span className="truncate">{label}</span>
+    </button>
   );
 }
 
