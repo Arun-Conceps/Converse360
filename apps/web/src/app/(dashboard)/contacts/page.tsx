@@ -42,6 +42,9 @@ import {
   MoreHorizontal,
   Pencil,
   Trash2,
+  Send,
+  Pin,
+  PinOff,
   Loader2,
   Users,
   ChevronLeft,
@@ -210,6 +213,9 @@ export default function ContactsPage() {
         .from('contacts')
         .select('*', { count: 'exact' })
         .eq('account_id', accountId)
+        // Pinned first (most recently pinned on top), then newest. Must
+        // match filter_contacts (migration 105) or pins vanish on filter.
+        .order('pinned_at', { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false })
         .range(from, to);
 
@@ -343,6 +349,23 @@ export default function ContactsPage() {
     router.replace(next.size ? `/contacts?${next}` : '/contacts', {
       scroll: false,
     });
+  }
+
+  async function togglePin(contact: Contact) {
+    if (!accountId) return;
+    const pinning = !contact.pinned_at;
+    const { error } = await supabase
+      .from('contacts')
+      .update({ pinned_at: pinning ? new Date().toISOString() : null })
+      .eq('id', contact.id)
+      .eq('account_id', accountId);
+    if (error) {
+      toast.error(pinning ? 'Could not pin contact' : 'Could not unpin contact');
+      return;
+    }
+    toast.success(pinning ? 'Pinned to top' : 'Unpinned');
+    // Refetch rather than patch: the row has to move to its new position.
+    fetchContacts();
   }
 
   function confirmDelete(contact: Contact) {
@@ -770,6 +793,25 @@ export default function ContactsPage() {
                 }}
               />
             )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                try {
+                  sessionStorage.setItem(
+                    'converse360.broadcast.pickedContacts',
+                    JSON.stringify([...selected]),
+                  );
+                } catch {
+                  toast.error('Could not hand the selection to the broadcast.');
+                  return;
+                }
+                router.push('/channels/whatsapp/broadcasts/new');
+              }}
+            >
+              <Send className="size-4" />
+              Send template
+            </Button>
             <GatedButton
               variant="destructive"
               size="sm"
@@ -859,7 +901,15 @@ export default function ContactsPage() {
                     />
                   </TableCell>
                   <TableCell className="text-foreground font-medium">
-                    {contact.name || <span className="text-muted-foreground italic">Unnamed</span>}
+                    <span className="inline-flex items-center gap-1.5">
+                      {contact.pinned_at && (
+                        <Pin
+                          className="text-primary size-3.5 shrink-0 fill-current"
+                          aria-label="Pinned"
+                        />
+                      )}
+                      {contact.name || <span className="text-muted-foreground italic">Unnamed</span>}
+                    </span>
                   </TableCell>
                   <TableCell className="text-muted-foreground font-mono text-xs">
                     {contact.phone}
@@ -930,6 +980,22 @@ export default function ContactsPage() {
                           <Pencil className="size-4" />
                           Edit
                         </DropdownMenuItem>
+                        {canEdit && (
+                          <DropdownMenuItem
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void togglePin(contact);
+                            }}
+                            className="text-popover-foreground focus:bg-muted focus:text-foreground"
+                          >
+                            {contact.pinned_at ? (
+                              <PinOff className="size-4" />
+                            ) : (
+                              <Pin className="size-4" />
+                            )}
+                            {contact.pinned_at ? 'Unpin' : 'Pin to top'}
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuSeparator className="bg-border" />
                         <DropdownMenuItem
                           variant="destructive"

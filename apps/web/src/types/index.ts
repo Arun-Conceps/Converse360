@@ -129,6 +129,8 @@ export interface Contact {
    * number may be cleared.
    */
   web_visitor_id?: string | null;
+  /** Migration 105. NULL = not pinned; pinned contacts list first. */
+  pinned_at?: string | null;
   name?: string;
   email?: string;
   company?: string;
