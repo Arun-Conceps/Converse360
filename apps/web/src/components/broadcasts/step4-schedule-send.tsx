@@ -21,6 +21,7 @@ import { MessagingTierCard } from '@/components/dashboard/messaging-tier-card';
 interface AudienceConfig {
   type: string;
   tagIds?: string[];
+  contactIds?: string[];
   csvContacts?: { phone: string; name?: string }[];
 }
 
@@ -95,6 +96,14 @@ export function Step4ScheduleSend({
 
           const uniqueIds = new Set((contactTags ?? []).map((ct) => ct.contact_id));
           setEstimatedReach(uniqueIds.size);
+        } else if (audience.type === 'contacts' && audience.contactIds?.length) {
+          const { count } = await supabase
+            .from('contacts')
+            .select('*', { count: 'exact', head: true })
+            .eq('account_id', accountId)
+            .not('phone', 'is', null)
+            .in('id', audience.contactIds);
+          setEstimatedReach(count ?? 0);
         } else if (audience.type === 'csv' && audience.csvContacts) {
           setEstimatedReach(audience.csvContacts.length);
         } else {
@@ -113,9 +122,11 @@ export function Step4ScheduleSend({
       ? 'All Contacts'
       : audience.type === 'tags'
         ? `Tags (${audience.tagIds?.length ?? 0} selected)`
-        : audience.type === 'csv'
-          ? 'CSV Upload'
-          : 'Custom';
+        : audience.type === 'contacts'
+          ? `Selected contacts (${audience.contactIds?.length ?? 0})`
+          : audience.type === 'csv'
+            ? 'CSV Upload'
+            : 'Custom';
 
   return (
     <div className="space-y-6">

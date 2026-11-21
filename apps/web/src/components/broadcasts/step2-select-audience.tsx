@@ -22,7 +22,13 @@ import {
   X,
 } from 'lucide-react';
 
-type AudienceType = 'all' | 'tags' | 'segments' | 'custom_field' | 'csv';
+type AudienceType =
+  | 'all'
+  | 'tags'
+  | 'segments'
+  | 'custom_field'
+  | 'csv'
+  | 'contacts';
 type CustomFieldOperator = 'is' | 'is_not' | 'contains';
 
 interface CustomFieldFilter {
@@ -34,6 +40,8 @@ interface CustomFieldFilter {
 interface AudienceConfig {
   type: AudienceType;
   tagIds?: string[];
+  /** Contacts ticked on the Contacts page ("Send template" bulk action). */
+  contactIds?: string[];
   /** Several segments UNION — "these people and also those people". */
   segmentIds?: string[];
   customField?: CustomFieldFilter;
@@ -190,6 +198,20 @@ export function Step2SelectAudience({
           .in('tag_id', audience.tagIds);
         baseIds = new Set((data ?? []).map((r) => r.contact_id));
       } else if (
+        audience.type === 'contacts' &&
+        audience.contactIds &&
+        audience.contactIds.length > 0
+      ) {
+        // Count only those with a phone, in THIS workspace — the send drops
+        // the rest, and the estimate must not promise more.
+        const { data } = await supabase
+          .from('contacts')
+          .select('id')
+          .eq('account_id', accountId)
+          .not('phone', 'is', null)
+          .in('id', audience.contactIds);
+        baseIds = new Set((data ?? []).map((r) => r.id));
+      } else if (
         audience.type === 'segments' &&
         audience.segmentIds &&
         audience.segmentIds.length > 0
@@ -278,6 +300,7 @@ export function Step2SelectAudience({
     accountId,
     audience.type,
     audience.tagIds,
+    audience.contactIds,
     audience.segmentIds,
     audience.customField,
     audience.csvContacts,
@@ -332,6 +355,9 @@ export function Step2SelectAudience({
 
   const isValid =
     audience.type === 'all' ||
+    (audience.type === 'contacts' &&
+      audience.contactIds &&
+      audience.contactIds.length > 0) ||
     (audience.type === 'tags' && audience.tagIds && audience.tagIds.length > 0) ||
     (audience.type === 'segments' &&
       audience.segmentIds &&
@@ -353,7 +379,20 @@ export function Step2SelectAudience({
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {audienceOptions.map((option) => {
+        {[
+          // Only offered when contacts were handed over from the Contacts page.
+          ...(audience.contactIds?.length
+            ? [
+                {
+                  type: 'contacts' as AudienceType,
+                  label: `Selected contacts (${audience.contactIds.length})`,
+                  description: 'The contacts you ticked on the Contacts page',
+                  icon: Users,
+                },
+              ]
+            : []),
+          ...audienceOptions,
+        ].map((option) => {
           const isSelected = audience.type === option.type;
           const Icon = option.icon;
           return (

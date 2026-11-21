@@ -17,6 +17,8 @@ import { Step4ScheduleSend } from '@/components/broadcasts/step4-schedule-send';
 import { useBroadcastSending } from '@/hooks/use-broadcast-sending';
 import { Check } from 'lucide-react';
 
+const PICKED_CONTACTS_KEY = 'converse360.broadcast.pickedContacts';
+
 const steps = [
   { label: 'Template', key: 'template' },
   { label: 'Audience', key: 'audience' },
@@ -32,7 +34,8 @@ export default function NewBroadcastPage() {
   const [currentStep, setCurrentStep] = useState(0);
   const [template, setTemplate] = useState<MessageTemplate | null>(null);
   const [audience, setAudience] = useState<{
-    type: 'all' | 'tags' | 'segments' | 'custom_field' | 'csv';
+    type: 'all' | 'tags' | 'segments' | 'custom_field' | 'csv' | 'contacts';
+    contactIds?: string[];
     tagIds?: string[];
     segmentIds?: string[];
     customField?: {
@@ -43,7 +46,24 @@ export default function NewBroadcastPage() {
     csvContacts?: { phone: string; name?: string }[];
     excludeTagIds?: string[];
     excludeSegmentIds?: string[];
-  }>({ type: 'all' });
+  }>(() => {
+    // Handed over by the contacts page's bulk "Send template". sessionStorage
+    // rather than the URL: hundreds of uuids do not fit in a query string.
+    try {
+      const raw = sessionStorage.getItem(PICKED_CONTACTS_KEY);
+      if (raw) {
+        // Cleared after a successful send, not here: Strict Mode runs this
+        // initializer twice and the second run would find it gone.
+        const ids = JSON.parse(raw);
+        if (Array.isArray(ids) && ids.length > 0) {
+          return { type: 'contacts', contactIds: ids.map(String) };
+        }
+      }
+    } catch {
+      // Storage blocked or bad JSON — fall through to the default audience.
+    }
+    return { type: 'all' };
+  });
   const [variables, setVariables] = useState<
     Record<string, { type: 'static' | 'field' | 'custom_field'; value: string }>
   >({});
@@ -69,6 +89,7 @@ export default function NewBroadcastPage() {
           segmentIds: audience.segmentIds,
           customField: audience.customField,
           csvContacts: audience.csvContacts,
+          contactIds: audience.contactIds,
           excludeTagIds: audience.excludeTagIds,
           excludeSegmentIds: audience.excludeSegmentIds,
         },
@@ -79,6 +100,11 @@ export default function NewBroadcastPage() {
         buttonParams: extras.buttonParams,
         scheduledAt,
       });
+      try {
+        sessionStorage.removeItem(PICKED_CONTACTS_KEY);
+      } catch {
+        // ignore
+      }
       if (scheduledAt) toast.success('Broadcast scheduled');
       router.push(`/broadcasts/${broadcastId}`);
     } catch (err) {

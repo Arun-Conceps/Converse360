@@ -22,7 +22,7 @@ import {
 export type CustomFieldOperator = 'is' | 'is_not' | 'contains';
 
 export interface AudienceConfig {
-  type: 'all' | 'tags' | 'custom_field' | 'csv' | 'segments';
+  type: 'all' | 'tags' | 'custom_field' | 'csv' | 'segments' | 'contacts';
   tagIds?: string[];
   /**
    * contact_segments ids (migration 076). Several segments UNION —
@@ -41,6 +41,12 @@ export interface AudienceConfig {
     value: string;
   };
   csvContacts?: { phone: string; name?: string }[];
+  /**
+   * Hand-picked contacts (type 'contacts') — the contacts page's bulk
+   * "Send template". Ids arrive from the browser, so they are only ever
+   * matched against the caller's own account below.
+   */
+  contactIds?: string[];
   excludeTagIds?: string[];
   /** Segments to subtract from whatever the above resolved to. */
   excludeSegmentIds?: string[];
@@ -355,6 +361,7 @@ export class DashboardBroadcastService {
           excludeTagIds: audience.excludeTagIds,
           excludeSegmentIds: audience.excludeSegmentIds,
           csvCount: audience.csvContacts?.length,
+          contactCount: audience.contactIds?.length,
         } as object,
         // 'queued', not 'sending': nothing has been sent yet, and with
         // fan-out there is a real interval between acceptance and the
@@ -440,6 +447,13 @@ export class DashboardBroadcastService {
           select,
         });
       }
+    } else if (audience.type === 'contacts' && audience.contactIds?.length) {
+      // account_id in the WHERE is the whole tenant check: Prisma bypasses
+      // RLS, so a foreign id in the list simply matches nothing.
+      contacts = await this.prisma.contacts.findMany({
+        where: { id: { in: audience.contactIds }, account_id: accountId },
+        select,
+      });
     } else if (audience.type === 'csv' && audience.csvContacts?.length) {
       contacts = await this.upsertCsvContacts(
         accountId,

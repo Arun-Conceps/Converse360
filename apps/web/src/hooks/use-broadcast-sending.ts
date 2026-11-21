@@ -12,7 +12,9 @@ export interface CustomFieldFilter {
 }
 
 export interface AudienceConfig {
-  type: 'all' | 'tags' | 'segments' | 'custom_field' | 'csv';
+  type: 'all' | 'tags' | 'segments' | 'custom_field' | 'csv' | 'contacts';
+  /** Hand-picked contacts, from the contacts page's bulk "Send template". */
+  contactIds?: string[];
   tagIds?: string[];
   /**
    * contact_segments ids (migration 076). Several segments UNION.
