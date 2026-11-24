@@ -96,7 +96,7 @@ export class SubscriptionSweepService implements OnModuleInit {
     });
 
     // A ONE-TIME Razorpay payment stores its ORDER id in
-    // `razorpay_subscription_id` (see razorpay.controller confirm-payment —
+    // `razorpay_subscription_id` (see razorpay.controller confirm-payment â€”
     // idempotency without a schema change). It is not a recurring mandate:
     // no gateway will ever renew it, so exempting it from the sweep left
     // one-time payers `active` for ever. Once the period they paid for has

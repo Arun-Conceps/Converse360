@@ -102,7 +102,7 @@ export async function login(
         breakGlass,
       },
     });
-    // One message for every failure — unknown email, wrong password,
+    // One message for every failure â€” unknown email, wrong password,
     // deactivated account: naming which tells an attacker what to try next.
     return { error: 'Those credentials are not valid.' };
   }

@@ -45,7 +45,7 @@ const INTENTS = [
  *    panel's administrator is an env credential, not a row in that table —
  *    there is no honest value to write. A change made here is therefore not
  *    attributable in the database; `admin_audit_log` (migration 073) is the
- *    record instead � every write here calls `recordAudit` with the staff
+ *    record instead — every write here calls `recordAudit` with the staff
  *    actor and a before/after summary (no gateway ids, no secrets).
  *  - Nothing is nulled implicitly. The api's own admin endpoint clears the
  *    Stripe/Razorpay ids on every manual plan assignment; doing that silently
