@@ -26,6 +26,21 @@ describe('resolveRedirectBase', () => {
       resolveRedirectBase({ ...base, forwardedHost: 'Crm.Example.com', allowedHosts: 'crm.example.com' }),
     ).toBe('https://crm.example.com')
   })
+  it('prefers an allowlisted forwarded host over a configured site url', () => {
+    expect(
+      resolveRedirectBase({
+        ...base,
+        forwardedHost: 'app.example.com',
+        allowedHosts: 'app.example.com',
+        siteUrl: 'http://203.0.113.9:8091',
+      }),
+    ).toBe('https://app.example.com')
+  })
+  it('still ignores an unlisted forwarded host when a site url is set', () => {
+    expect(resolveRedirectBase({ ...base, siteUrl: 'http://203.0.113.9:8091' })).toBe(
+      'http://203.0.113.9:8091',
+    )
+  })
   it('ignores a malformed site url', () => {
     expect(resolveRedirectBase({ ...base, siteUrl: 'javascript:alert(1)' })).toBe(
       'http://127.0.0.1:3000',
