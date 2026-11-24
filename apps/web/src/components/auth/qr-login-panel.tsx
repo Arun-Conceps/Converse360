@@ -20,6 +20,12 @@ interface Props {
  * signed-in phone approves it. The token the poll finally returns is a
  * one-time Supabase magic-link hash, exchanged for this browser's OWN session.
  */
+const QR_STEPS = [
+  "Open Converse360 on your phone",
+  "Go to More → Scan QR to sign in on web",
+  "Point the camera at this code",
+];
+
 export function QrLoginPanel({ destination, onError }: Props) {
   const [phase, setPhase] = useState<Phase>("loading");
   const [code, setCode] = useState<string | null>(null);
@@ -124,11 +130,32 @@ export function QrLoginPanel({ destination, onError }: Props) {
           Show a new QR code
         </Button>
       ) : (
-        <ol className="list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
-          <li>Open Converse360 on your phone</li>
-          <li>Go to More → Scan QR to sign in on web</li>
-          <li>Point the camera at this code</li>
-        </ol>
+        <div className="flex w-full flex-col gap-3">
+          <h2 className="text-base font-semibold">Scan to log in</h2>
+          <ol className="space-y-3">
+            {QR_STEPS.map((step, i) => (
+              <li key={step} className="flex items-start gap-3 text-sm">
+                <span
+                  aria-hidden
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs font-medium"
+                >
+                  {i + 1}
+                </span>
+                <span className="pt-0.5">{step}</span>
+              </li>
+            ))}
+          </ol>
+          <details className="text-sm text-muted-foreground">
+            <summary className="w-fit cursor-pointer font-medium text-foreground underline underline-offset-4">
+              Need help?
+            </summary>
+            <ul className="mt-2 list-disc space-y-1 pl-5">
+              <li>Update the Converse360 app to the latest version.</li>
+              <li>Make sure you are signed in on your phone.</li>
+              <li>The code refreshes after a short time. Press “Show a new QR code” if it expires.</li>
+            </ul>
+          </details>
+        </div>
       )}
     </div>
   );
