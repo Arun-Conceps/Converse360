@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { SupabaseAuthGuard } from '../../auth/guards/supabase-auth.guard';
+import { RequireRole } from '../../auth/decorators/require-role.decorator';
 import { CurrentAccount } from '../../auth/decorators/current-account.decorator';
 import type { SupabaseAccountContext } from '../../auth/types/account-context.type';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -44,6 +45,7 @@ export class CampaignSchedulesController {
   }
 
   /** POST /api/campaigns/schedules */
+  @RequireRole('agent')
   @Post('schedules')
   async createSchedule(
     @CurrentAccount() account: SupabaseAccountContext,
@@ -81,7 +83,7 @@ export class CampaignSchedulesController {
         });
       }
       const broadcastExists = await this.prisma.broadcasts.findFirst({
-        where: { id: broadcastId },
+        where: { id: broadcastId, account_id: account.accountId },
         select: { id: true },
       });
       if (!broadcastExists) {

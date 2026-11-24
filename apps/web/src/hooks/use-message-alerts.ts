@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import type { Message } from '@/types';
+import { useAuth } from '@/hooks/use-auth';
+import { createConversationScopeCache } from '@/lib/workspace/realtime-scope';
 import {
   alertBody,
   getAlertPreferencesServerSnapshot,
@@ -43,6 +45,7 @@ import {
  *   setTimeout, for exactly that reason.
  */
 export function useMessageAlerts() {
+  const { accountId } = useAuth();
   // Preferences are an external store (localStorage). useSyncExternalStore
   // is the correct primitive: no hydration-mismatch risk (getServerSnapshot
   // returns a static default), no set-state-in-effect lint violation, and
@@ -112,18 +115,32 @@ export function useMessageAlerts() {
   }, []);
 
   useEffect(() => {
+    // Realtime follows memberships, not the active workspace, and `messages`
+    // has no account_id to filter on. Wait for the workspace, then verify each
+    // message's conversation belongs to it before alerting; unknown => silent.
+    if (!accountId) return;
     const supabase = createClient();
+    const scope = createConversationScopeCache(accountId, async (id) => {
+      const { data } = await supabase
+        .from('conversations')
+        .select('account_id')
+        .eq('id', id)
+        .eq('account_id', accountId)
+        .maybeSingle();
+      return data as { account_id?: string | null } | null;
+    });
 
     // Its own channel, matching the convention of use-total-unread — a
     // shared channel would couple unrelated subscribers' lifecycles.
     const channel = supabase
-      .channel('message-alerts-realtime')
+      .channel(`message-alerts-realtime:${accountId}`)
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages' },
-        (payload) => {
+        async (payload) => {
           const message = payload.new as Message;
           if (!isAlertableMessage(message, Date.now())) return;
+          if (!(await scope.isOwn(message.conversation_id))) return;
 
           const current = prefsRef.current;
           const away = isUserAway(document.hidden, document.hasFocus());
@@ -166,7 +183,7 @@ export function useMessageAlerts() {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [play]);
+  }, [play, accountId]);
 
   const setSound = useCallback((enabled: boolean) => {
     writeAlertPreference('sound', enabled);

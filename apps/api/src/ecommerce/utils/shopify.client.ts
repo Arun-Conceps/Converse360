@@ -1,3 +1,6 @@
+import { safeFetch } from '../../ai/lib/http-guard';
+import { normalizeStoreUrl } from './store-url.util';
+
 export interface ShopifyProduct {
   id: string;
   title: string;
@@ -48,10 +51,11 @@ export class ShopifyClient {
     apiPassword: string,
     accessToken?: string,
   ) {
-    if (!storeUrl.startsWith('http://') && !storeUrl.startsWith('https://')) {
-      storeUrl = `https://${storeUrl}`;
+    const normalized = normalizeStoreUrl('shopify', storeUrl);
+    if (!normalized) {
+      throw new Error('Invalid Shopify store URL (expected *.myshopify.com)');
     }
-    this.storeUrl = storeUrl.replace(/\/$/, '');
+    this.storeUrl = normalized;
     this.apiKey = apiKey;
     this.apiPassword = apiPassword;
     this.accessToken = accessToken || '';
@@ -75,36 +79,26 @@ export class ShopifyClient {
 
     if (this.accessToken) {
       headers['X-Shopify-Access-Token'] = this.accessToken;
-      console.log('[Shopify] Using OAuth token');
     } else {
       headers['Authorization'] = `Basic ${this.authHeader}`;
-      console.log(
-        '[Shopify] Using Basic auth with key:',
-        this.apiKey ? '***' : 'missing',
-      );
     }
 
-    console.log('[Shopify] GraphQL Query:', query.substring(0, 100) + '...');
-    const response = await fetch(url, {
+    // safeFetch: public hosts only, redirects re-validated per hop.
+    const response = await safeFetch({
+      url,
       method: 'POST',
       headers,
       body: JSON.stringify({ query, variables }),
+      timeoutMs: 20_000,
+      maxBytes: 8 * 1024 * 1024,
     });
 
-    if (!response.ok) {
-      console.error(
-        '[Shopify] Request failed:',
-        response.status,
-        response.statusText,
-      );
-      throw new Error(
-        `Shopify API error: ${response.status} ${response.statusText}`,
-      );
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`Shopify API error: ${response.status}`);
     }
 
-    const data = await response.json();
+    const data = JSON.parse(response.body);
     if (data.errors) {
-      console.error('[Shopify] GraphQL errors:', data.errors);
       throw new Error(`GraphQL errors: ${JSON.stringify(data.errors)}`);
     }
 

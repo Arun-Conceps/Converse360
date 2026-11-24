@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { SupabaseAuthGuard } from '../../auth/guards/supabase-auth.guard';
+import { RequireRole } from '../../auth/decorators/require-role.decorator';
 import { CurrentAccount } from '../../auth/decorators/current-account.decorator';
 import type { SupabaseAccountContext } from '../../auth/types/account-context.type';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -42,6 +43,7 @@ export class AccountApiKeysController {
    * GET /api/account/api-keys
    * List API keys (safe columns only — key_hash never returned). Any member.
    */
+  @RequireRole('admin')
   @Get('api-keys')
   async listApiKeys(
     @CurrentAccount() account: SupabaseAccountContext,
@@ -60,6 +62,7 @@ export class AccountApiKeysController {
    * POST /api/account/api-keys
    * Mint a new key. Admin+. Plaintext is returned ONCE.
    */
+  @RequireRole('admin')
   @Post('api-keys')
   async createApiKey(
     @CurrentAccount() account: SupabaseAccountContext,
@@ -119,6 +122,7 @@ export class AccountApiKeysController {
    * DELETE /api/account/api-keys/:id
    * Soft-revoke a key (sets revoked_at). Admin+.
    */
+  @RequireRole('admin')
   @Delete('api-keys/:id')
   async revokeApiKey(
     @Param('id') id: string,

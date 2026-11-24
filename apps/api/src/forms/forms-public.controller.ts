@@ -6,33 +6,105 @@ import {
   HttpCode,
   NotFoundException,
   Param,
+  PayloadTooLargeException,
   Post,
   Query,
+  Req,
 } from '@nestjs/common';
+import { Type } from 'class-transformer';
+import {
+  IsNumber,
+  IsObject,
+  IsOptional,
+  IsString,
+  MaxLength,
+  ValidateNested,
+} from 'class-validator';
+import type { Request } from 'express';
 
+import { RateLimitService } from '../common/rate-limit/rate-limit.service';
 import { FormsService } from './services/forms.service';
 import { FormSubmitService } from './services/form-submit.service';
 import { BookingService } from './services/booking.service';
 import type { PublicForm } from './form.types';
 import type { SubmitFormResult } from './services/form-submit.service';
+import {
+  MAX_SUBMIT_BYTES,
+  enforceRateLimit,
+  issueRenderToken,
+  payloadBytes,
+  requestIp,
+  sanitiseUtm,
+} from './form-public-guard';
 
-interface PublicSubmitDto {
-  answers: Record<string, unknown>;
+class PublicSubmitMetaDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  pageUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  referrer?: string;
+
+  /** Shallow string map; re-shaped by sanitiseUtm (caps count and lengths). */
+  @IsOptional()
+  @IsObject()
+  utm?: Record<string, unknown>;
+}
+
+class PublicSubmitSpamDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(256)
+  honeypot?: string;
+
+  @IsOptional()
+  @IsNumber()
+  elapsedMs?: number;
+
+  /** Server-issued render token echoed back from the render response. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  token?: string;
+}
+
+export class PublicSubmitDto {
+  @IsObject()
+  answers!: Record<string, unknown>;
+
   /**
    * Declared origin of the submission. Advisory only — see the note in
    * `submitBySlug` on why 'widget' cannot be claimed here.
    */
-  source?: 'hosted' | 'embed';
-  meta?: {
-    pageUrl?: string;
-    referrer?: string;
-    utm?: Record<string, unknown>;
-  };
-  spam?: {
-    honeypot?: string;
-    elapsedMs?: number;
-  };
+  @IsOptional()
+  @IsString()
+  @MaxLength(16)
+  source?: string;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => PublicSubmitMetaDto)
+  meta?: PublicSubmitMetaDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => PublicSubmitSpamDto)
+  spam?: PublicSubmitSpamDto;
 }
+
+/** Per-minute ceilings. Per-IP buckets bound one client; the per-form
+ *  bucket bounds a distributed script against a single form. */
+const LIMITS = {
+  submitIp: Number(process.env.FORM_SUBMIT_PER_IP_PER_MIN) || 10,
+  submitForm: Number(process.env.FORM_SUBMIT_PER_FORM_PER_MIN) || 200,
+  // Render/slots are cheap reads, and the hosted page renders them from the
+  // web server, so many visitors can share one source IP until `trust proxy`
+  // is configured. Generous on purpose.
+  read: Number(process.env.FORM_READ_PER_IP_PER_MIN) || 600,
+};
 
 /**
  * Public-facing endpoints for form render and submission.
@@ -50,6 +122,7 @@ export class FormsPublicController {
     private readonly forms: FormsService,
     private readonly submit: FormSubmitService,
     private readonly bookings: BookingService,
+    private readonly rateLimit: RateLimitService,
   ) {}
 
   /**
@@ -64,10 +137,16 @@ export class FormsPublicController {
    */
   @Get(':slug/slots')
   async slots(
+    @Req() req: Request,
     @Param('slug') slug: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
   ) {
+    await enforceRateLimit(
+      this.rateLimit,
+      `form:slots:${slug}:${requestIp(req)}`,
+      LIMITS.read,
+    );
     const form = await this.forms.findPublicBySlug(slug);
     if (!form) throw new NotFoundException('Form not found.');
     return this.bookings.slotsFor(form.form.id, { from, to });
@@ -81,10 +160,21 @@ export class FormsPublicController {
    * guessed slugs returns nothing more than "no form here".
    */
   @Get(':slug')
-  async render(@Param('slug') slug: string): Promise<PublicForm> {
+  async render(
+    @Req() req: Request,
+    @Param('slug') slug: string,
+  ): Promise<PublicForm & { spam_token?: string }> {
+    await enforceRateLimit(
+      this.rateLimit,
+      `form:render:${slug}:${requestIp(req)}`,
+      LIMITS.read,
+    );
     const result = await this.forms.findPublicBySlug(slug);
     if (!result) throw new NotFoundException('Form not found.');
-    return result.form;
+    // Server-issued render time, echoed back on submit as spam.token so the
+    // minimum-time check does not rest on a number the client chooses.
+    const spamToken = issueRenderToken(result.form.id);
+    return spamToken ? { ...result.form, spam_token: spamToken } : result.form;
   }
 
   /**
@@ -121,14 +211,32 @@ export class FormsPublicController {
   @Post(':slug/submit')
   @HttpCode(200)
   async submitBySlug(
+    @Req() req: Request,
     @Param('slug') slug: string,
     @Body() body: PublicSubmitDto,
   ): Promise<SubmitFormResult> {
+    const ip = requestIp(req);
+    await enforceRateLimit(
+      this.rateLimit,
+      `form:submit:${slug}:${ip}`,
+      LIMITS.submitIp,
+    );
+    await enforceRateLimit(
+      this.rateLimit,
+      `form:submit-form:${slug}`,
+      LIMITS.submitForm,
+    );
     const form = await this.forms.findPublicBySlug(slug);
     if (!form) throw new NotFoundException('Form not found.');
 
     if (!body?.answers || typeof body.answers !== 'object') {
       throw new BadRequestException('answers is required.');
+    }
+    if (
+      payloadBytes({ answers: body.answers, meta: body.meta }) >
+      MAX_SUBMIT_BYTES
+    ) {
+      throw new PayloadTooLargeException('That submission is too large.');
     }
 
     return this.submit.submit({
@@ -139,7 +247,14 @@ export class FormsPublicController {
       settings: form.settings,
       answers: body.answers,
       source: body.source === 'embed' ? 'embed' : 'hosted',
-      meta: body.meta,
+      meta: {
+        pageUrl: body.meta?.pageUrl,
+        referrer: body.meta?.referrer,
+        utm: sanitiseUtm(body.meta?.utm),
+        // Server-observed, never client-supplied: stored as a salted hash.
+        ip,
+        userAgent: req.headers['user-agent'],
+      },
       spam: body.spam,
     });
   }

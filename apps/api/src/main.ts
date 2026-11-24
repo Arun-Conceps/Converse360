@@ -56,6 +56,16 @@ async function bootstrap() {
     bodyParser: false,
   });
 
+  // Behind the host reverse proxy `req.ip` is the proxy's address unless Express
+  // is told how many hops to trust. Per-IP rate limits (public forms, web
+  // widget, QR sign-in) all key on `req.ip`; without this every visitor shares
+  // one bucket. Set TRUST_PROXY_HOPS to the number of proxies in front of the
+  // API (1 = a single reverse proxy; 0 = none / direct exposure).
+  const trustProxyHops = Number.parseInt(process.env.TRUST_PROXY_HOPS ?? '1', 10);
+  if (Number.isFinite(trustProxyHops) && trustProxyHops > 0) {
+    app.set('trust proxy', trustProxyHops);
+  }
+
   app.use(json({ limit: MAX_BODY, verify: captureRawBody }));
   app.use(
     urlencoded({ extended: true, limit: MAX_BODY, verify: captureRawBody }),

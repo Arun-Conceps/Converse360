@@ -4,6 +4,10 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Message, Conversation, Contact } from "@/types";
 import type { RealtimeChannel } from "@supabase/supabase-js";
+import {
+  accountRealtimeFilter,
+  rowBelongsToWorkspace,
+} from "@/lib/workspace/realtime-scope";
 
 interface RealtimeEvent<T> {
   eventType: "INSERT" | "UPDATE" | "DELETE";
@@ -13,6 +17,12 @@ interface RealtimeEvent<T> {
 
 interface UseRealtimeOptions {
   channelName: string;
+  /**
+   * Active workspace. Realtime follows RLS (memberships), so without this a
+   * multi-workspace user receives every workspace's events. Nothing is
+   * subscribed until it is known, and the channel is rebuilt when it changes.
+   */
+  accountId: string | null | undefined;
   onMessageEvent?: (event: RealtimeEvent<Message>) => void;
   onConversationEvent?: (event: RealtimeEvent<Conversation>) => void;
   /**
@@ -30,6 +40,7 @@ interface UseRealtimeOptions {
 
 export function useRealtime({
   channelName,
+  accountId,
   onMessageEvent,
   onConversationEvent,
   onContactEvent,
@@ -53,13 +64,16 @@ export function useRealtime({
   });
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !accountId) return;
+    const filter = accountRealtimeFilter(accountId);
 
     const supabase = createClient();
 
     const channel = supabase
-      .channel(channelName)
+      .channel(`${channelName}:${accountId}`)
       .on(
+        // `messages` has no account_id column, so it cannot be filtered
+        // here; consumers must resolve the conversation's workspace.
         "postgres_changes",
         { event: "*", schema: "public", table: "messages" },
         (payload) => {
@@ -72,8 +86,9 @@ export function useRealtime({
       )
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "conversations" },
+        { event: "*", schema: "public", table: "conversations", filter },
         (payload) => {
+          if (!rowBelongsToWorkspace(payload.new as Conversation, accountId)) return;
           onConversationRef.current?.({
             eventType: payload.eventType as RealtimeEvent<Conversation>["eventType"],
             new: payload.new as Conversation,
@@ -87,8 +102,9 @@ export function useRealtime({
         // conversation that carries it, so INSERT here would be a second
         // path to the same row and DELETE is handled by the conversation
         // cascade.
-        { event: "UPDATE", schema: "public", table: "contacts" },
+        { event: "UPDATE", schema: "public", table: "contacts", filter },
         (payload) => {
+          if (!rowBelongsToWorkspace(payload.new as Contact, accountId)) return;
           onContactRef.current?.({
             eventType: "UPDATE",
             new: payload.new as Contact,
@@ -107,7 +123,7 @@ export function useRealtime({
       channelRef.current = null;
       setIsConnected(false);
     };
-  }, [channelName, enabled]);
+  }, [channelName, enabled, accountId]);
 
   const unsubscribe = useCallback(() => {
     if (channelRef.current) {

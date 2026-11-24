@@ -36,6 +36,8 @@ export interface ValidationIssue {
 }
 
 interface FlowInput {
+  /** Own id, when known — lets start_flow reject pointing at itself. */
+  id?: string;
   name: string;
   trigger_type: 'keyword' | 'first_inbound_message' | 'manual';
   trigger_config: Record<string, unknown>;
@@ -112,7 +114,7 @@ export function validateFlowForActivation(
 
   // Per-node rules (Meta limits + dead-end + edge resolution).
   for (const n of nodes) {
-    issues.push(...validateNode(n, keys));
+    issues.push(...validateNode(n, keys, flow.id));
   }
 
   // Reachability — every non-orphan node must be reachable from the
@@ -242,7 +244,8 @@ export function waitExceedsWindow(
 
 function validateNode(
   node: NodeInput,
-  knownKeys: Set<string>
+  knownKeys: Set<string>,
+  ownFlowId?: string
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
@@ -1051,6 +1054,14 @@ function validateNode(
           node_key: node.node_key,
           field: 'flow_id',
           message: 'Pick the flow to continue in.',
+        });
+      } else if (ownFlowId && cfg.flow_id.trim() === ownFlowId) {
+        issues.push({
+          severity: 'error',
+          scope: 'node',
+          node_key: node.node_key,
+          field: 'flow_id',
+          message: 'A flow cannot continue into itself. Pick a different flow.',
         });
       }
       break;

@@ -16,6 +16,7 @@ import { CurrentAccount } from '../../auth/decorators/current-account.decorator'
 import type { SupabaseAccountContext } from '../../auth/types/account-context.type';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AiCreditsService } from './ai-credits.service';
+import { fetchCapturedPayment } from '../../subscription/razorpay-payment.util';
 import {
   LOW_BALANCE_THRESHOLD,
   WEIGHTED_TOKENS_PER_CREDIT,
@@ -322,7 +323,7 @@ export class AiCreditsController {
       );
     }
 
-    const { keySecret } = this.razorpay();
+    const { rzp, keySecret } = this.razorpay();
     const expected = createHmac('sha256', keySecret)
       .update(`${orderId}|${paymentId}`)
       .digest('hex');
@@ -343,6 +344,28 @@ export class AiCreditsController {
     });
     if (!order) {
       throw new HttpException('Order not found', HttpStatus.NOT_FOUND);
+    }
+
+    // The HMAC proves Razorpay signed this pair, not that the money was
+    // captured or that it equals OUR price. Re-read both from Razorpay and
+    // bind them to the row we priced server-side before granting anything.
+    const { order: rzpOrder } = await fetchCapturedPayment(
+      rzp,
+      orderId,
+      paymentId,
+    );
+    const rzpNotes = (rzpOrder.notes ?? {}) as Record<string, unknown>;
+    if (
+      rzpNotes.kind !== 'ai_credits' ||
+      rzpNotes.orderId !== order.id ||
+      rzpNotes.accountId !== account.accountId ||
+      Number(rzpOrder.amount) !== Number(order.amount_minor) ||
+      String(rzpOrder.currency) !== String(order.currency)
+    ) {
+      throw new HttpException(
+        { error: 'Payment does not match this order.', code: 'order_mismatch' },
+        HttpStatus.BAD_REQUEST,
+      );
     }
 
     // The grant itself is in the service, because Razorpay's webhook

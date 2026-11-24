@@ -562,3 +562,48 @@ describe('FlowDispatchService.dispatchInbound', () => {
     );
   });
 });
+
+describe('FlowDispatchService start_flow chain cap', () => {
+  it('a flow that start_flows itself stops after 3 hops instead of recursing', async () => {
+    const prisma = makePrismaMock();
+    const flowA = makeFlowRow();
+    (prisma.flow as Record<string, unknown>).findFirst = vi
+      .fn()
+      .mockResolvedValue(flowA);
+    prisma.flow.findMany.mockResolvedValue([flowA]);
+    prisma.flowNode.findMany.mockResolvedValue([
+      makeNode('start', 'start', { next_node_key: 'jump' }),
+      makeNode('jump', 'start_flow', { flow_id: 'flow-1' }),
+    ]);
+    let n = 0;
+    prisma.flowRun.create.mockImplementation(() => {
+      n += 1;
+      return Promise.resolve(
+        makeRunRow({ id: `run-${n}`, currentNodeKey: 'start' }),
+      );
+    });
+    const service = new FlowDispatchService(
+      prisma as unknown as PrismaService,
+      makeMetaSendMock() as unknown as ChannelSenderService,
+      {} as unknown as FlowMetaSendService,
+      makeWaitsMock() as unknown as FlowWaitService,
+      makeSegmentsMock() as unknown as SegmentMembershipService,
+    );
+
+    const result = await service.dispatchInbound(makeInput());
+
+    expect(result.consumed).toBe(true);
+    // Original run + 3 nested starts, then the cap bites.
+    expect(prisma.flowRun.create).toHaveBeenCalledTimes(4);
+    expect(prisma.flowRunEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventType: 'error',
+          payload: expect.objectContaining({
+            reason: 'start_flow_chain_too_deep',
+          }),
+        }),
+      }),
+    );
+  });
+});

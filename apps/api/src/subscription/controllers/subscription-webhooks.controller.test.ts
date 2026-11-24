@@ -1,6 +1,10 @@
 import { createHmac } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { SubscriptionWebhooksController } from './subscription-webhooks.controller';
+import {
+  SubscriptionWebhooksController,
+  mapRazorpaySubscriptionStatus,
+  mapStripeSubscriptionStatus,
+} from './subscription-webhooks.controller';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { AiCreditsService } from '../../ai/credits/ai-credits.service';
 
@@ -29,6 +33,7 @@ function makePrismaMock() {
     user_subscriptions: { findUnique: vi.fn(), upsert: vi.fn() },
     subscription_plans: { findUnique: vi.fn() },
     profile: { findUnique: vi.fn() },
+    account: { findUnique: vi.fn() },
     account_onboarding: { findUnique: vi.fn(), upsert: vi.fn() },
     ai_credit_orders: { findFirst: vi.fn() },
   };
@@ -52,9 +57,9 @@ function makeRes() {
 }
 
 /** A signed raw-body request, the way Razorpay sends one. */
-function makeReq(event: unknown) {
+function makeReq(event: unknown, secret = WEBHOOK_SECRET) {
   const rawBody = Buffer.from(JSON.stringify(event), 'utf8');
-  const signature = createHmac('sha256', WEBHOOK_SECRET)
+  const signature = createHmac('sha256', secret)
     .update(rawBody.toString('utf8'))
     .digest('hex');
 
@@ -64,15 +69,22 @@ function makeReq(event: unknown) {
   };
 }
 
-function capturedPayment(notes: Record<string, string>) {
+function capturedPayment(
+  notes: Record<string, string>,
+  extra: Record<string, unknown> = {},
+  event = 'payment.captured',
+) {
   return {
-    event: 'payment.captured',
+    event,
     payload: {
       payment: {
         entity: {
           id: 'pay_abc123',
           order_id: 'order_TQiCDAwBY8u63y',
+          status: 'captured',
+          amount: 30000,
           notes,
+          ...extra,
         },
       },
     },
@@ -96,7 +108,10 @@ describe('SubscriptionWebhooksController — Razorpay payment captured', () => {
     prisma.subscription_plans.findUnique.mockResolvedValue({
       id: 'plan-starter',
       trial_days: 15,
+      price_monthly: 300,
+      price_yearly: 3000,
     });
+    prisma.account.findUnique.mockResolvedValue({ id: 'acc-1' });
     prisma.profile.findUnique.mockResolvedValue({ accountId: 'acc-1' });
     // Not a credit top-up — this order is a plan payment.
     prisma.ai_credit_orders.findFirst.mockResolvedValue(null);
@@ -216,5 +231,112 @@ describe('SubscriptionWebhooksController — Razorpay payment captured', () => {
 
     expect(res.statusCode).toBe(400);
     expect(prisma.user_subscriptions.upsert).not.toHaveBeenCalled();
+  });
+});
+
+describe('SubscriptionWebhooksController — hardening (C-1, H-14)', () => {
+  let prisma: ReturnType<typeof makePrismaMock>;
+  let controller: SubscriptionWebhooksController;
+
+  const NOTES = {
+    userId: 'owner-1',
+    planName: 'STARTER',
+    billingCycle: 'monthly',
+  };
+
+  beforeEach(() => {
+    process.env.RAZORPAY_WEBHOOK_SECRET = WEBHOOK_SECRET;
+    process.env.STRIPE_SECRET_KEY = 'sk_test_x';
+    process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
+    prisma = makePrismaMock();
+    prisma.subscription_plans.findUnique.mockResolvedValue({
+      id: 'plan-starter',
+      trial_days: 15,
+      price_monthly: 300,
+      price_yearly: 3000,
+    });
+    prisma.account.findUnique.mockResolvedValue({ id: 'acc-1' });
+    prisma.user_subscriptions.findUnique.mockResolvedValue(null);
+    controller = new SubscriptionWebhooksController(
+      prisma as unknown as PrismaService,
+      { creditByGatewayOrderId: vi.fn() } as unknown as AiCreditsService,
+    );
+  });
+
+  async function rzp(event: unknown, secret?: string) {
+    const res = makeRes();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await controller.handleRazorpayWebhook(makeReq(event, secret) as any, res as any);
+    return res;
+  }
+
+  it('Razorpay: fails closed with 503 when the webhook secret is unset', async () => {
+    delete process.env.RAZORPAY_WEBHOOK_SECRET;
+    // Signed with the empty key, which the old code would have accepted.
+    const res = await rzp(capturedPayment(NOTES), '');
+    expect(res.statusCode).toBe(503);
+    expect(prisma.user_subscriptions.upsert).not.toHaveBeenCalled();
+  });
+
+  it('Stripe: fails closed with 503 when the webhook secret is unset', async () => {
+    delete process.env.STRIPE_WEBHOOK_SECRET;
+    const res = makeRes();
+    await controller.handleStripeWebhook(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { headers: { 'stripe-signature': 't=1,v1=abc' }, rawBody: Buffer.from('{}') } as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      res as any,
+    );
+    expect(res.statusCode).toBe(503);
+  });
+
+  it('ignores payment.authorized (not money)', async () => {
+    const res = await rzp(
+      capturedPayment(NOTES, { status: 'authorized' }, 'payment.authorized'),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(prisma.user_subscriptions.upsert).not.toHaveBeenCalled();
+  });
+
+  it('ignores a payment.captured event whose entity is not captured', async () => {
+    await rzp(capturedPayment(NOTES, { status: 'authorized' }));
+    expect(prisma.user_subscriptions.upsert).not.toHaveBeenCalled();
+  });
+
+  it('ignores a payment whose amount is not the plan price', async () => {
+    await rzp(capturedPayment(NOTES, { amount: 100 }));
+    expect(prisma.user_subscriptions.upsert).not.toHaveBeenCalled();
+  });
+
+  it('ignores a user who owns no workspace', async () => {
+    prisma.account.findUnique.mockResolvedValue(null);
+    await rzp(capturedPayment(NOTES));
+    expect(prisma.user_subscriptions.upsert).not.toHaveBeenCalled();
+  });
+
+  it('is idempotent: the same order already applied is a no-op', async () => {
+    prisma.user_subscriptions.findUnique.mockResolvedValue({
+      razorpay_subscription_id: 'order_TQiCDAwBY8u63y',
+      status: 'active',
+    });
+    await rzp(capturedPayment(NOTES));
+    expect(prisma.user_subscriptions.upsert).not.toHaveBeenCalled();
+  });
+
+  it('processes a genuine captured payment', async () => {
+    await rzp(capturedPayment(NOTES));
+    expect(prisma.user_subscriptions.upsert).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps gateway statuses: only known-good states are active', async () => {
+    const r = mapRazorpaySubscriptionStatus;
+    const s = mapStripeSubscriptionStatus;
+    for (const x of ['halted', 'paused', 'pending']) expect(r(x)).toBe('past_due');
+    expect(r('active')).toBe('active');
+    expect(r('something_new')).toBeNull();
+    for (const x of ['unpaid', 'paused', 'past_due']) expect(s(x)).toBe('past_due');
+    expect(s('incomplete_expired')).toBe('expired');
+    expect(s('active')).toBe('active');
+    expect(s('something_new')).toBeNull();
   });
 });

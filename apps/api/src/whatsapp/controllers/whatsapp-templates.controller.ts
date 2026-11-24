@@ -13,6 +13,7 @@ import {
 import type { Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { SupabaseAuthGuard } from '../../auth/guards/supabase-auth.guard';
+import { RequireRole } from '../../auth/decorators/require-role.decorator';
 import { CurrentAccount } from '../../auth/decorators/current-account.decorator';
 import type { SupabaseAccountContext } from '../../auth/types/account-context.type';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -136,6 +137,7 @@ export class WhatsappTemplatesController {
    * from Meta (meta_template_id set) but are no longer there. Purely-local
    * drafts that were never pushed to Meta (meta_template_id = null) are kept.
    */
+  @RequireRole('admin')
   @Post('templates/sync')
   async sync(
     @CurrentAccount() account: SupabaseAccountContext,
@@ -311,6 +313,7 @@ export class WhatsappTemplatesController {
    *
    * Submit a new template draft to Meta for review and persist locally.
    */
+  @RequireRole('admin')
   @Post('templates/submit')
   async submit(
     @CurrentAccount() account: SupabaseAccountContext,
@@ -453,6 +456,7 @@ export class WhatsappTemplatesController {
    *
    * Edit an existing template. Only APPROVED, REJECTED, PAUSED statuses allowed.
    */
+  @RequireRole('admin')
   @Patch('templates/:id')
   async editTemplate(
     @Param('id') id: string,
@@ -564,6 +568,7 @@ export class WhatsappTemplatesController {
    *
    * Deletes a template on Meta (if it has a meta_template_id) then locally.
    */
+  @RequireRole('admin')
   @Delete('templates/:id')
   async deleteTemplate(
     @Param('id') id: string,

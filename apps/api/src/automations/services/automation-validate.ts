@@ -12,6 +12,8 @@
 // failures surface at save time.
 // ------------------------------------------------------------
 
+import { checkRegexSafety } from './safe-regex.util';
+
 export interface ValidationIssue {
   /** Dot-path for the UI to highlight; stable enough to build a table. */
   path: string;
@@ -200,6 +202,19 @@ function validateOne(
         : null;
       if (rules && rules.length > 0) {
         rules.forEach((r, i) => {
+          if (r?.operator === 'matches_regex' && typeof r?.value === 'string') {
+            // A pattern with `{{ }}` is resolved at run time; the run-time
+            // guard still screens it.
+            if (!r.value.includes('{{')) {
+              const check = checkRegexSafety(r.value);
+              if (!check.ok) {
+                issues.push({
+                  path: `${path}.rules[${i}].value`,
+                  message: `regex not allowed: ${check.reason}`,
+                });
+              }
+            }
+          }
           if (!nonEmpty(r?.subject)) {
             issues.push({
               path: `${path}.rules[${i}].subject`,

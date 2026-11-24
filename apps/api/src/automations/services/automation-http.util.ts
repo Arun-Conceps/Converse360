@@ -1,4 +1,10 @@
 import { isDeliverableUrl } from '../../common/security/ssrf.util';
+import {
+  BlockedAddressError,
+  pinnedRequest,
+  readStreamCapped,
+  type PinnedResponse,
+} from '../../common/security/pinned-http';
 import { interpolate, interpolateDeep } from './automation-interpolation.util';
 import type { AutomationContext, SendWebhookStepConfig } from '../automation.types';
 
@@ -89,21 +95,24 @@ export async function performHttpStep(
   const timeoutMs = clampTimeout(cfg.timeout_seconds);
   const startedAt = Date.now();
 
-  let res: Response;
+  let res: PinnedResponse;
   try {
-    res = await fetch(url, {
+    // Dials through the address-pinned client: the address validated is the
+    // address connected to (DNS rebinding), and redirects are NOT followed
+    // — a public URL could 3xx-bounce to an internal address.
+    res = await pinnedRequest({
+      url: new URL(url),
       method,
       headers,
       body,
-      // Do NOT follow redirects — a public URL could 3xx-bounce to an
-      // internal address, defeating the guard above.
-      redirect: 'manual',
-      signal: AbortSignal.timeout(timeoutMs),
+      timeoutMs,
     });
   } catch (err) {
+    if (err instanceof BlockedAddressError) {
+      throw new HttpStepError(`destination not allowed: ${redactUrl(url)}`);
+    }
     const msg = err instanceof Error ? err.message : String(err);
-    // AbortSignal.timeout produces a TimeoutError whose message is not
-    // obviously about us; say which limit was hit.
+    // A timeout's message is not obviously about us; say which limit was hit.
     const isTimeout = err instanceof Error && err.name === 'TimeoutError';
     throw new HttpStepError(
       isTimeout ? `request timed out after ${timeoutMs}ms` : `request failed: ${msg}`,
@@ -237,19 +246,27 @@ function clampTimeout(seconds: number | undefined): number {
 }
 
 async function readResponse(
-  res: Response,
+  res: PinnedResponse,
   startedAt: number,
 ): Promise<HttpStepOutput> {
   const headers: Record<string, string> = {};
-  res.headers.forEach((value, key) => {
+  for (const [key, value] of Object.entries(res.headers)) {
     // Response headers land in the run context, which is persisted on a
     // wait and rendered in the logs UI. Cookies are credentials and have
     // no business in either.
-    if (key.toLowerCase() === 'set-cookie') return;
-    headers[key.toLowerCase()] = value;
-  });
+    if (key === 'set-cookie') continue;
+    headers[key] = value;
+  }
 
-  const { text, truncated } = await readBounded(res);
+  let text = '';
+  let truncated = false;
+  try {
+    const r = await readStreamCapped(res.stream, HTTP_MAX_RESPONSE_BYTES);
+    text = r.buffer.toString('utf8');
+    truncated = r.truncated;
+  } catch {
+    // A body that dies mid-read still has a status worth reporting.
+  }
   const isJson = (headers['content-type'] ?? '').includes('json');
   let body: unknown = text;
   if (isJson && text) {
@@ -270,53 +287,6 @@ async function readResponse(
     truncated,
     duration_ms: Date.now() - startedAt,
   };
-}
-
-/** Read at most HTTP_MAX_RESPONSE_BYTES, streaming so an enormous body is
- *  never fully buffered. */
-async function readBounded(
-  res: Response,
-): Promise<{ text: string; truncated: boolean }> {
-  if (!res.body) {
-    const text = await res.text().catch(() => '');
-    return {
-      text: text.slice(0, HTTP_MAX_RESPONSE_BYTES),
-      truncated: text.length > HTTP_MAX_RESPONSE_BYTES,
-    };
-  }
-
-  const reader = res.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  let truncated = false;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value) continue;
-      total += value.byteLength;
-      if (total > HTTP_MAX_RESPONSE_BYTES) {
-        chunks.push(
-          value.slice(0, value.byteLength - (total - HTTP_MAX_RESPONSE_BYTES)),
-        );
-        truncated = true;
-        break;
-      }
-      chunks.push(value);
-    }
-  } finally {
-    await reader.cancel().catch(() => undefined);
-  }
-
-  const merged = new Uint8Array(
-    chunks.reduce((n, c) => n + c.byteLength, 0),
-  );
-  let offset = 0;
-  for (const c of chunks) {
-    merged.set(c, offset);
-    offset += c.byteLength;
-  }
-  return { text: new TextDecoder().decode(merged), truncated };
 }
 
 /**

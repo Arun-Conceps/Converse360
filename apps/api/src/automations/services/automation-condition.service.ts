@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SegmentMembershipService } from '../../common/segments/segment-membership.service';
 import type {
@@ -8,6 +8,7 @@ import type {
   StepExecutionArgs,
 } from '../automation.types';
 import { toChannel } from '../../common/messaging/channel';
+import { safeRegexTest } from './safe-regex.util';
 import { interpolate, resolveToken } from './automation-interpolation.util';
 
 /**
@@ -221,6 +222,8 @@ export class AutomationConditionService {
  * Exported for the tests that pin the legacy lift — it is the part most
  * likely to be "simplified" by someone who has not seen the old rows.
  */
+const regexLogger = new Logger('AutomationCondition');
+
 export function normalizeRules(cfg: ConditionStepConfig): ConditionRule[] {
   if (Array.isArray(cfg.rules) && cfg.rules.length > 0) {
     return cfg.rules.filter((r) => r && r.subject);
@@ -275,14 +278,12 @@ function compare(
       return operator === 'greater_than' ? a > b : a < b;
     }
     case 'matches_regex':
-      try {
-        // No 'g' flag: a stateful lastIndex across calls would make the
-        // same rule alternate true/false on identical input.
-        return new RegExp(expected).test(actualText);
-      } catch {
-        // An invalid pattern is an authoring mistake, not a run failure.
-        return false;
-      }
+      // Pattern is author data, text is customer-controlled: bounded and
+      // statically screened (see safe-regex.util.ts). Invalid or unsafe
+      // patterns are an authoring mistake, not a run failure -> false.
+      return safeRegexTest(expected, actualText, (reason) =>
+        regexLogger.warn(`matches_regex pattern rejected: ${reason}`),
+      );
     default:
       return false;
   }

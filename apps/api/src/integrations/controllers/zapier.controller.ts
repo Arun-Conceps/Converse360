@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { SupabaseAuthGuard } from '../../auth/guards/supabase-auth.guard';
+import { RequireRole } from '../../auth/decorators/require-role.decorator';
 import { CurrentAccount } from '../../auth/decorators/current-account.decorator';
 import type { SupabaseAccountContext } from '../../auth/types/account-context.type';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -54,6 +55,7 @@ export class ZapierController {
   }
 
   /** POST /api/integrations/zapier — connect a new Zapier Catch Hook URL. */
+  @RequireRole('admin')
   @Post()
   async create(
     @CurrentAccount() account: SupabaseAccountContext,
@@ -94,6 +96,7 @@ export class ZapierController {
   }
 
   /** PATCH /api/integrations/zapier/:id — toggle active / update events. */
+  @RequireRole('admin')
   @Patch(':id')
   async update(
     @Param('id') id: string,
@@ -147,6 +150,7 @@ export class ZapierController {
   }
 
   /** DELETE /api/integrations/zapier/:id — disconnect. */
+  @RequireRole('admin')
   @Delete(':id')
   async remove(
     @Param('id') id: string,
@@ -167,6 +171,7 @@ export class ZapierController {
   }
 
   /** POST /api/integrations/zapier/:id/test — fire a test ping. */
+  @RequireRole('admin')
   @Post(':id/test')
   async test(
     @Param('id') id: string,

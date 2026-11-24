@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { SupabaseAuthGuard } from '../../auth/guards/supabase-auth.guard';
+import { RequireRole } from '../../auth/decorators/require-role.decorator';
 import { CurrentAccount } from '../../auth/decorators/current-account.decorator';
 import type { SupabaseAccountContext } from '../../auth/types/account-context.type';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -42,6 +43,7 @@ export class CtwaController {
   }
 
   /** POST /api/ctwa/campaigns */
+  @RequireRole('agent')
   @Post('campaigns')
   async createCampaign(
     @CurrentAccount() account: SupabaseAccountContext,
@@ -77,6 +79,7 @@ export class CtwaController {
   }
 
   /** POST /api/ctwa/track — record an ad click. */
+  @RequireRole('agent')
   @Post('track')
   async trackClick(
     @CurrentAccount() account: SupabaseAccountContext,
@@ -97,11 +100,48 @@ export class CtwaController {
         .json({ error: 'Campaign ID is required' });
     }
 
+    // Ids come from the body and Prisma bypasses RLS: pin every one to
+    // the caller's own account before writing.
+    const campaignId = String(body.campaign_id);
+    const campaign = await this.prisma.ctwa_campaigns.findFirst({
+      where: { id: campaignId, account_id: account.accountId },
+      select: { id: true },
+    });
+    if (!campaign) {
+      return res
+        .status(HttpStatus.NOT_FOUND)
+        .json({ error: 'Campaign not found' });
+    }
+    const contactId = (body.contact_id as string | null) ?? null;
+    if (contactId) {
+      const c = await this.prisma.contacts.findFirst({
+        where: { id: contactId, account_id: account.accountId },
+        select: { id: true },
+      });
+      if (!c) {
+        return res
+          .status(HttpStatus.NOT_FOUND)
+          .json({ error: 'Contact not found' });
+      }
+    }
+    const conversationId = (body.conversation_id as string | null) ?? null;
+    if (conversationId) {
+      const c = await this.prisma.conversations.findFirst({
+        where: { id: conversationId, account_id: account.accountId },
+        select: { id: true },
+      });
+      if (!c) {
+        return res
+          .status(HttpStatus.NOT_FOUND)
+          .json({ error: 'Conversation not found' });
+      }
+    }
+
     const click = await this.prisma.ctwa_clicks.create({
       data: {
-        campaign_id: body.campaign_id as string,
-        contact_id: (body.contact_id as string | null) ?? null,
-        conversation_id: (body.conversation_id as string | null) ?? null,
+        campaign_id: campaign.id,
+        contact_id: contactId,
+        conversation_id: conversationId,
         user_agent: (body.user_agent as string | null) ?? null,
         referrer: (body.referrer as string | null) ?? null,
         ip_address: (body.ip_address as string | null) ?? null,

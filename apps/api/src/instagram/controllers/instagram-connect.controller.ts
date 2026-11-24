@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { SupabaseAuthGuard } from '../../auth/guards/supabase-auth.guard';
+import { RequireRole } from '../../auth/decorators/require-role.decorator';
 import { CurrentAccount } from '../../auth/decorators/current-account.decorator';
 import type { SupabaseAccountContext } from '../../auth/types/account-context.type';
 import { parseSignedRequest } from '../../common/security/signed-request.util';
@@ -41,6 +42,7 @@ export class InstagramConnectController {
    * Start the flow. Returns the URL rather than 302-ing so the client
    * can open it in a popup and keep the dashboard mounted behind it.
    */
+  @RequireRole('admin')
   @Get('connect/start')
   @UseGuards(SupabaseAuthGuard)
   async start(
@@ -131,6 +133,7 @@ export class InstagramConnectController {
   }
 
   /** Repair a connection whose webhook subscription failed or lapsed. */
+  @RequireRole('admin')
   @Post('config/resubscribe')
   @UseGuards(SupabaseAuthGuard)
   async resubscribe(
@@ -147,6 +150,7 @@ export class InstagramConnectController {
     }
   }
 
+  @RequireRole('admin')
   @Delete('config')
   @UseGuards(SupabaseAuthGuard)
   async disconnect(

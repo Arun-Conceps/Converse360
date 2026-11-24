@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { assertPublicUrl, isBlockedAddress } from './http-guard';
+import { assertPublicUrl, isBlockedAddress, safeFetch } from './http-guard';
 import { AiError } from './types';
 
 /**
@@ -81,5 +81,55 @@ describe('assertPublicUrl', () => {
   it('accepts a public IP literal without a DNS lookup', async () => {
     const url = await assertPublicUrl('https://1.1.1.1/robots.txt');
     expect(url.hostname).toBe('1.1.1.1');
+  });
+});
+
+describe('assertPublicUrl bypass table (IPv4-in-IPv6 and reserved ranges)', () => {
+  const bad = [
+    'http://[::ffff:127.0.0.1]/',
+    'http://[::ffff:7f00:1]/',
+    'http://[::ffff:a9fe:a9fe]/',
+    'http://[0:0:0:0:0:ffff:7f00:1]/',
+    'http://[::FFFF:7F00:1]/',
+    'http://[64:ff9b::7f00:1]/',
+    'http://[2002:7f00:1::]/',
+    'http://[::7f00:1]/',
+    'http://[fec0::1]/',
+    'http://[fe80::1]/',
+    'http://[fd12::1]/',
+    'http://[ff02::1]/',
+    'http://192.0.0.8/',
+    'http://198.18.0.1/',
+    'http://224.1.1.1/',
+    'http://240.1.1.1/',
+    'http://0x7f.1/',
+    'http://2130706433/',
+    'http://metadata.google.internal/',
+    'http://localhost./',
+  ];
+  it.each(bad)('rejects %s', async (u) => {
+    await expect(assertPublicUrl(u)).rejects.toMatchObject({
+      code: 'blocked_address',
+    });
+  });
+  it('isBlockedAddress agrees on hex-mapped forms', () => {
+    for (const ip of [
+      '::ffff:7f00:1',
+      '::ffff:a9fe:a9fe',
+      '64:ff9b::7f00:1',
+      '2002:7f00:1::',
+      '::7f00:1',
+      'fec0::1',
+    ]) {
+      expect(isBlockedAddress(ip), ip).toBe(true);
+    }
+  });
+});
+
+describe('safeFetch connect-time pinning', () => {
+  it('refuses a hex-mapped loopback before any socket is opened', async () => {
+    await expect(
+      safeFetch({ url: 'http://[::ffff:7f00:1]:9/' }),
+    ).rejects.toMatchObject({ code: 'blocked_address' });
   });
 });

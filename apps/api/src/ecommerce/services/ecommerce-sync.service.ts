@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ShopifyClient } from '../utils/shopify.client.js';
 import { WooCommerceClient } from '../utils/woocommerce.client.js';
+import { decryptCredential } from '../utils/credentials.util';
 
 /**
  * Pulls a connected store's catalogue into `ecommerce_products`.
@@ -41,6 +42,11 @@ export class EcommerceSyncService {
     // Disconnected between the request and the job. Not an error.
     if (!integration) return;
 
+    // Credentials are encrypted at rest; legacy plaintext rows pass through.
+    const apiKey = decryptCredential(integration.api_key) ?? '';
+    const apiSecret = decryptCredential(integration.api_secret) ?? '';
+    const accessToken = decryptCredential(integration.access_token) ?? undefined;
+
     let productsSynced = 0;
     const ordersSynced = 0;
 
@@ -48,9 +54,9 @@ export class EcommerceSyncService {
       if (integration.platform === 'shopify') {
         const client = new ShopifyClient(
           integration.store_url,
-          integration.api_key ?? '',
-          integration.api_secret ?? '',
-          integration.access_token ?? undefined,
+          apiKey,
+          apiSecret,
+          accessToken,
         );
 
         const products = await client.getProducts();
@@ -86,8 +92,8 @@ export class EcommerceSyncService {
       } else if (integration.platform === 'woocommerce') {
         const client = new WooCommerceClient(
           integration.store_url,
-          integration.api_key ?? '',
-          integration.api_secret ?? '',
+          apiKey,
+          apiSecret,
         );
 
         const products = await client.getAllProducts();

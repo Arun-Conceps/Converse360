@@ -10,6 +10,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { validateFormDefinition } from '../form-validate';
 import { parseAvailability, type Availability } from '../slot-engine.util';
 import { PRESENTATIONAL_TYPES } from '../form.types';
+import { parseRedirectUrlForSave, safeRedirectUrl } from '../form-public-guard';
 import type {
   FormField,
   FormNotify,
@@ -90,6 +91,7 @@ export class FormsService {
   ): Promise<FormJson> {
     if (input.fields) this.assertValidFields(input.fields);
 
+    const settings = this.sanitiseSettingsInput(input.settings);
     const slug = await this.uniqueSlug(input.name);
 
     const row = await this.prisma.forms.create({
@@ -103,7 +105,7 @@ export class FormsService {
         fields: (input.fields ?? []) as unknown as Prisma.InputJsonValue,
         settings: {
           ...DEFAULT_SETTINGS,
-          ...input.settings,
+          ...settings,
         } as unknown as Prisma.InputJsonValue,
         notify: {
           ...DEFAULT_NOTIFY,
@@ -112,6 +114,24 @@ export class FormsService {
       },
     });
     return this.toJson(row);
+  }
+
+  /**
+   * H-10: redirect_url ends up in `window.location.href` on a public page,
+   * so only an absolute http(s) URL may be stored. Rejected, not silently
+   * dropped, so the author learns their setting did not take.
+   */
+  private sanitiseSettingsInput(
+    settings: Partial<FormSettings> | undefined,
+  ): Partial<FormSettings> | undefined {
+    if (!settings || !('redirect_url' in settings)) return settings;
+    const parsed = parseRedirectUrlForSave(settings.redirect_url);
+    if (!parsed.ok) {
+      throw new BadRequestException(
+        'The redirect URL must be a full http:// or https:// address.',
+      );
+    }
+    return { ...settings, redirect_url: parsed.value };
   }
 
   async update(
@@ -167,12 +187,13 @@ export class FormsService {
       data.fields = input.fields as unknown as Prisma.InputJsonValue;
     }
     if (input.settings !== undefined) {
+      const incoming = this.sanitiseSettingsInput(input.settings);
       // Merged, not replaced: the settings panel sends only what changed,
       // and a replace would reset every other setting to its default.
       data.settings = {
         ...DEFAULT_SETTINGS,
         ...(existing.settings as unknown as FormSettings),
-        ...input.settings,
+        ...incoming,
       } as unknown as Prisma.InputJsonValue;
     }
     if (input.notify !== undefined) {
@@ -369,6 +390,8 @@ export class FormsService {
       ...DEFAULT_SETTINGS,
       ...(row.settings as FormSettings),
     };
+    // Rows saved before H-10 may hold a javascript: URL; drop it on read.
+    settings.redirect_url = safeRedirectUrl(settings.redirect_url);
 
     return {
       accountId: row.account_id,

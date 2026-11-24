@@ -14,8 +14,10 @@ import {
 import { RequiresEntitlement } from '../../subscription/guards/entitlement.guard';
 import type { Request, Response } from 'express';
 import { SupabaseAuthGuard } from '../../auth/guards/supabase-auth.guard';
+import { RequireRole } from '../../auth/decorators/require-role.decorator';
 import { CurrentAccount } from '../../auth/decorators/current-account.decorator';
 import type { SupabaseAccountContext } from '../../auth/types/account-context.type';
+import { hasMinRole } from '../../auth/role-rank.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   generateInviteToken,
@@ -67,6 +69,7 @@ export class AccountInvitationsController {
    * GET /api/account/invitations
    * List outstanding (un-redeemed, non-expired) invitations. Admin+.
    */
+  @RequireRole('admin')
   @Get('invitations')
   async listInvitations(
     @CurrentAccount() account: SupabaseAccountContext,
@@ -99,6 +102,7 @@ export class AccountInvitationsController {
    * Create a new invite link. Admin+.
    * Token is returned ONCE in the response; only its hash is persisted.
    */
+  @RequireRole('admin')
   @Post('invitations')
   @RequiresEntitlement('team_members')
   async createInvitation(
@@ -111,6 +115,13 @@ export class AccountInvitationsController {
     if (!isInviteRole(role)) {
       return res.status(HttpStatus.BAD_REQUEST).json({
         error: "'role' must be one of admin, agent, viewer",
+      });
+    }
+
+    // Never mint a role above the inviter's own.
+    if (!hasMinRole(account.role, role)) {
+      return res.status(HttpStatus.FORBIDDEN).json({
+        error: 'You cannot invite someone to a role higher than your own',
       });
     }
 
@@ -162,6 +173,7 @@ export class AccountInvitationsController {
    * DELETE /api/account/invitations/:id
    * Revoke a pending invitation. Admin+.
    */
+  @RequireRole('admin')
   @Delete('invitations/:id')
   async revokeInvitation(
     @Param('id') id: string,

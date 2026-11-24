@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import Stripe from 'stripe';
 import { SupabaseAuthGuard } from '../../auth/guards/supabase-auth.guard';
+import { RequireRole } from '../../auth/decorators/require-role.decorator';
 import { CurrentAccount } from '../../auth/decorators/current-account.decorator';
 import type { SupabaseAccountContext } from '../../auth/types/account-context.type';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -33,6 +34,7 @@ export class StripeController {
    * Creates a Stripe checkout session for plan upgrade.
    */
   @Post('create-checkout-session')
+  @RequireRole('owner')
   async createCheckoutSession(
     @CurrentAccount() account: SupabaseAccountContext,
     @Body() body: { planName?: string; billingCycle?: string },
@@ -48,6 +50,10 @@ export class StripeController {
     const validPlans = ['STARTER', 'GROWTH'];
     if (!validPlans.includes(planName)) {
       throw new HttpException('Invalid plan name', HttpStatus.BAD_REQUEST);
+    }
+
+    if (billingCycle !== 'monthly' && billingCycle !== 'yearly') {
+      throw new HttpException('Invalid billing cycle', HttpStatus.BAD_REQUEST);
     }
 
     const stripe = this.getStripeInstance();

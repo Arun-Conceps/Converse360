@@ -16,6 +16,17 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { SupabaseAuthGuard } from '../../auth/guards/supabase-auth.guard';
 import { CurrentAccount } from '../../auth/decorators/current-account.decorator';
 import type { SupabaseAccountContext } from '../../auth/types/account-context.type';
+import { RequireRole } from '../../auth/decorators/require-role.decorator';
+import { safeFetch } from '../../ai/lib/http-guard';
+import {
+  INTEGRATION_PUBLIC_SELECT,
+  encryptCredential,
+} from '../utils/credentials.util';
+import {
+  normalizeStoreUrl,
+  isShopifyShopDomain,
+} from '../utils/store-url.util';
+import { decodeShopifyState } from '../utils/shopify-oauth-state.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
@@ -39,6 +50,7 @@ export class EcommerceController {
   ) {
     const integrations = await this.prisma.ecommerce_integrations.findMany({
       where: { account_id: account.accountId },
+      select: INTEGRATION_PUBLIC_SELECT,
       orderBy: { created_at: 'desc' },
     });
 
@@ -47,6 +59,7 @@ export class EcommerceController {
 
   /** POST /api/ecommerce/integrations — save store credentials. */
   @Post('integrations')
+  @RequireRole('admin')
   async createIntegration(
     @CurrentAccount() account: SupabaseAccountContext,
     @Body()
@@ -73,17 +86,38 @@ export class EcommerceController {
       });
     }
 
+    const storeUrl = normalizeStoreUrl(platform as string, store_url);
+    if (!storeUrl) {
+      return res.status(HttpStatus.BAD_REQUEST).json({
+        error:
+          platform === 'shopify'
+            ? 'store_url must be an https://<shop>.myshopify.com address'
+            : 'store_url must be a valid https:// address',
+      });
+    }
+    for (const k of ['api_key', 'api_secret', 'access_token'] as const) {
+      const v = body[k];
+      if (v !== undefined && v !== null && typeof v !== 'string') {
+        return res
+          .status(HttpStatus.BAD_REQUEST)
+          .json({ error: `${k} must be a string` });
+      }
+    }
+
     try {
       const integration = await this.prisma.ecommerce_integrations.create({
         data: {
           account_id: account.accountId,
           platform: platform as string,
-          store_url: store_url as string,
-          api_key: (body.api_key as string | null) ?? null,
-          api_secret: (body.api_secret as string | null) ?? null,
-          access_token: (body.access_token as string | null) ?? null,
+          store_url: storeUrl,
+          api_key: encryptCredential(body.api_key as string | undefined),
+          api_secret: encryptCredential(body.api_secret as string | undefined),
+          access_token: encryptCredential(
+            body.access_token as string | undefined,
+          ),
           status: 'disconnected',
         },
+        select: INTEGRATION_PUBLIC_SELECT,
       });
 
       return res.status(HttpStatus.CREATED).json({ integration });
@@ -102,20 +136,34 @@ export class EcommerceController {
   /**
    * GET /api/ecommerce/shopify/callback — Shopify OAuth redirect handler.
    * Verifies HMAC, exchanges code for access token, updates integration row.
-   * Note: this runs without auth guard since it's the OAuth redirect landing.
+   * Runs under the session guard (a top-level GET carries the cookie); the
+   * signed state must additionally name the same account.
    */
   @Get('shopify/callback')
-  async shopifyCallback(@Req() req: Request, @Res() res: Response) {
+  async shopifyCallback(
+    @CurrentAccount() account: SupabaseAccountContext,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
     const { code, state, shop, hmac } = req.query as Record<string, string>;
 
-    if (!code || !state || !shop) {
+    if (!code || !state || !shop || !hmac) {
       return res
         .status(HttpStatus.BAD_REQUEST)
         .json({ error: 'Missing required parameters' });
     }
 
+    if (!isShopifyShopDomain(shop)) {
+      return res.status(HttpStatus.BAD_REQUEST).json({ error: 'Invalid shop' });
+    }
+
     const clientSecret = process.env.SHOPIFY_CLIENT_SECRET ?? '';
     const clientId = process.env.SHOPIFY_CLIENT_ID ?? '';
+    if (!clientSecret) {
+      return res
+        .status(HttpStatus.INTERNAL_SERVER_ERROR)
+        .json({ error: 'Shopify is not configured' });
+    }
 
     // Verify HMAC: remove hmac param, sort remaining, compute SHA-256
     const params = new URLSearchParams(req.query as Record<string, string>);
@@ -125,11 +173,12 @@ export class EcommerceController {
       .map(([k, v]) => `${k}=${v}`)
       .join('&');
 
-    const computed = createHmac('sha256', clientSecret)
+    const computedBuf = createHmac('sha256', clientSecret)
       .update(sortedParams)
-      .digest('hex');
-    const hmacBuf = Buffer.from(hmac ?? '');
-    const computedBuf = Buffer.from(computed);
+      .digest();
+    const hmacBuf = /^[0-9a-f]{64}$/i.test(hmac)
+      ? Buffer.from(hmac, 'hex')
+      : Buffer.alloc(0);
 
     const valid =
       hmacBuf.length === computedBuf.length &&
@@ -139,33 +188,47 @@ export class EcommerceController {
       return res.status(HttpStatus.BAD_REQUEST).json({ error: 'Invalid HMAC' });
     }
 
-    let stateData: { integrationId?: string };
-    try {
-      stateData = JSON.parse(Buffer.from(state, 'base64').toString()) as {
-        integrationId?: string;
-      };
-    } catch {
+    // Signed, expiring state bound to the account that started the flow.
+    const stateData = decodeShopifyState(state);
+    if (!stateData || stateData.accountId !== account.accountId) {
       return res
         .status(HttpStatus.BAD_REQUEST)
         .json({ error: 'Invalid state' });
     }
 
-    const { integrationId } = stateData;
+    const integration = await this.prisma.ecommerce_integrations.findFirst({
+      where: {
+        id: stateData.integrationId,
+        account_id: account.accountId,
+        platform: 'shopify',
+      },
+      select: { id: true },
+    });
+    if (!integration) {
+      return res
+        .status(HttpStatus.NOT_FOUND)
+        .json({ error: 'Integration not found' });
+    }
 
     // Exchange code for access token
     let tokenData: { access_token?: string };
     try {
-      const tokenRes = await fetch(`https://${shop}/admin/oauth/access_token`, {
+      const tokenRes = await safeFetch({
+        url: `https://${shop}/admin/oauth/access_token`,
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           client_id: clientId,
           client_secret: clientSecret,
           code,
         }),
+        timeoutMs: 15_000,
+        maxBytes: 64 * 1024,
       });
-      tokenData = (await tokenRes.json()) as { access_token?: string };
-      if (!tokenRes.ok) throw new Error('Token exchange failed');
+      tokenData = JSON.parse(tokenRes.body) as { access_token?: string };
+      if (tokenRes.status < 200 || tokenRes.status >= 300) {
+        throw new Error('Token exchange failed');
+      }
+      if (!tokenData.access_token) throw new Error('No access token returned');
     } catch (err) {
       this.logger.error('[Shopify OAuth] Token exchange error', err);
       return res
@@ -173,10 +236,11 @@ export class EcommerceController {
         .json({ error: 'Failed to connect to Shopify' });
     }
 
-    await this.prisma.ecommerce_integrations.update({
-      where: { id: integrationId },
+    await this.prisma.ecommerce_integrations.updateMany({
+      where: { id: integration.id, account_id: account.accountId },
       data: {
-        access_token: tokenData.access_token,
+        store_url: `https://${shop.toLowerCase()}`,
+        access_token: encryptCredential(tokenData.access_token),
         status: 'connected',
         sync_error: null,
       },
@@ -188,6 +252,7 @@ export class EcommerceController {
 
   /** POST /api/ecommerce/sync/:id — pull products + orders from the store. */
   @Post('sync/:id')
+  @RequireRole('admin')
   async syncIntegration(
     @Param('id') id: string,
     @CurrentAccount() account: SupabaseAccountContext,

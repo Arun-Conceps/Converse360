@@ -9,6 +9,7 @@ import { FormContactResolverService } from './form-contact-resolver.service';
 import { BookingService } from './booking.service';
 import { validateSubmission } from '../form-validate';
 import type { FormField, FormSettings } from '../form.types';
+import { checkRenderToken, safeRedirectUrl } from '../form-public-guard';
 
 export interface SubmitFormInput {
   accountId: string;
@@ -35,6 +36,8 @@ export interface SubmitFormInput {
     honeypot?: string;
     /** Milliseconds between render and submit. */
     elapsedMs?: number;
+    /** Server-issued render token (see form-public-guard). */
+    token?: string;
   };
 }
 
@@ -86,7 +89,7 @@ export class FormSubmitService {
   ) {}
 
   async submit(input: SubmitFormInput): Promise<SubmitFormResult> {
-    this.assertNotSpam(input);
+    const spamFlag = this.assertNotSpam(input);
 
     const validation = validateSubmission(input.fields, input.answers);
     if (!validation.ok) {
@@ -104,7 +107,7 @@ export class FormSubmitService {
         contact_id: input.contactId ?? null,
         data: validation.data as Prisma.InputJsonValue,
         source: input.source,
-        meta: this.buildMeta(input) as Prisma.InputJsonValue,
+        meta: this.buildMeta(input, spamFlag) as Prisma.InputJsonValue,
       },
       select: { id: true },
     });
@@ -198,7 +201,8 @@ export class FormSubmitService {
       contactId,
       successMode: input.settings.success_mode,
       successMessage: input.settings.success_message,
-      redirectUrl: input.settings.redirect_url,
+      // Re-checked on read: rows saved before H-10 may hold javascript: URLs.
+      redirectUrl: safeRedirectUrl(input.settings.redirect_url),
       booking,
     };
   }
@@ -207,7 +211,7 @@ export class FormSubmitService {
    * Three stacked heuristics. All are silent to a human filling the form
    * honestly, and all are cheap enough to run on every submission.
    */
-  private assertNotSpam(input: SubmitFormInput): void {
+  private assertNotSpam(input: SubmitFormInput): string | undefined {
     // 1. Honeypot: a field hidden with CSS that no human can see. Bots fill
     //    every input they find.
     if (input.settings.honeypot && input.spam?.honeypot?.trim()) {
@@ -220,15 +224,20 @@ export class FormSubmitService {
       });
     }
 
-    // 2. Time-to-submit: nobody reads and fills a form in under a second.
+    // 2. Time-to-submit. The client-reported elapsedMs is advisory: omitting
+    //    `spam` used to skip the whole check. A server-issued render token
+    //    (HMAC over form id + issue time) gives a time the client cannot
+    //    choose. No/invalid token is accepted but FLAGGED, not rejected, so
+    //    pages rendered before this shipped keep working.
     const minMs = Math.max(0, input.settings.min_seconds) * 1000;
-    if (
-      minMs > 0 &&
-      input.spam?.elapsedMs !== undefined &&
-      input.spam.elapsedMs < minMs
-    ) {
+    const tokenCheck = checkRenderToken(input.formId, input.spam?.token);
+    const elapsedMs =
+      tokenCheck.status === 'valid'
+        ? tokenCheck.elapsedMs
+        : input.spam?.elapsedMs;
+    if (minMs > 0 && elapsedMs !== undefined && elapsedMs < minMs) {
       this.logger.warn(
-        `form ${input.formId} submitted in ${input.spam.elapsedMs}ms (min ${minMs}ms)`,
+        `form ${input.formId} submitted in ${elapsedMs}ms (min ${minMs}ms)`,
       );
       throw new BadRequestException({
         message: 'That was too quick — please try again.',
@@ -238,12 +247,20 @@ export class FormSubmitService {
 
     // 3. Per-IP rate limiting happens in the controller, where the request
     //    context lives.
+    if (tokenCheck.status === 'valid') return undefined;
+    return tokenCheck.status === 'absent'
+      ? 'no_timing_token'
+      : 'invalid_timing_token';
   }
 
-  private buildMeta(input: SubmitFormInput): Record<string, unknown> {
+  private buildMeta(
+    input: SubmitFormInput,
+    spamFlag?: string,
+  ): Record<string, unknown> {
     const salt =
       process.env.WEB_IP_HASH_SALT ?? process.env.ENCRYPTION_KEY ?? '';
     return {
+      ...(spamFlag ? { spam_suspected: spamFlag } : {}),
       ...(input.meta?.pageUrl ? { page_url: input.meta.pageUrl } : {}),
       ...(input.meta?.referrer ? { referrer: input.meta.referrer } : {}),
       ...(input.meta?.utm ? { utm: input.meta.utm } : {}),

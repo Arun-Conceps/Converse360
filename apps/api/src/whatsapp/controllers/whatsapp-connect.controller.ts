@@ -13,6 +13,7 @@ import {
 import type { Response } from 'express';
 import { randomInt } from 'node:crypto';
 import { SupabaseAuthGuard } from '../../auth/guards/supabase-auth.guard';
+import { RequireRole } from '../../auth/decorators/require-role.decorator';
 import { CurrentAccount } from '../../auth/decorators/current-account.decorator';
 import type { SupabaseAccountContext } from '../../auth/types/account-context.type';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -49,6 +50,7 @@ export class WhatsappConnectController {
    * from the client, exchanges the code for a long-lived token, then calls
    * saveWhatsAppConnection (shared with the manual-config route).
    */
+  @RequireRole('admin')
   @Post('connect')
   async embeddedSignup(
     @CurrentAccount() account: SupabaseAccountContext,
@@ -268,6 +270,7 @@ export class WhatsappConnectController {
    *
    * Manual entry: saves or updates the WhatsApp config for the authenticated user.
    */
+  @RequireRole('admin')
   @Post('config')
   async saveConfig(
     @CurrentAccount() account: SupabaseAccountContext,
@@ -341,6 +344,7 @@ export class WhatsappConnectController {
    * especially an Embedded Signup one with no manual form — can set the
    * catalog id without re-entering their access token.
    */
+  @RequireRole('admin')
   @Patch('config/catalog')
   async setCatalogId(
     @CurrentAccount() account: SupabaseAccountContext,
@@ -375,6 +379,7 @@ export class WhatsappConnectController {
    *
    * Removes the WhatsApp configuration row (used by "Reset Configuration" button).
    */
+  @RequireRole('admin')
   @Delete('config')
   async deleteConfig(
     @CurrentAccount() account: SupabaseAccountContext,

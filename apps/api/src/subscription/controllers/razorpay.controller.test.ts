@@ -2,6 +2,19 @@ import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HttpException } from '@nestjs/common';
 import { RazorpayController } from './razorpay.controller';
+
+// The controller re-reads the order and payment from Razorpay itself.
+const rzpMock = vi.hoisted(() => ({
+  ordersFetch: vi.fn(),
+  paymentsFetch: vi.fn(),
+  ordersCreate: vi.fn(),
+}));
+vi.mock('razorpay', () => ({
+  default: class {
+    orders = { fetch: rzpMock.ordersFetch, create: rzpMock.ordersCreate };
+    payments = { fetch: rzpMock.paymentsFetch };
+  },
+}));
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { SupabaseAccountContext } from '../../auth/types/account-context.type';
 
@@ -24,11 +37,37 @@ import type { SupabaseAccountContext } from '../../auth/types/account-context.ty
 
 const KEY_SECRET = 'test_secret_do_not_use';
 
+/** A genuine, captured, freshly-created STARTER monthly payment. */
+function mockGateway(
+  order: Record<string, unknown> = {},
+  payment: Record<string, unknown> = {},
+) {
+  rzpMock.ordersFetch.mockReset().mockResolvedValue({
+    id: ORDER,
+    amount: 30000,
+    amount_paid: 30000,
+    notes: { userId: 'owner-1', planName: 'STARTER', billingCycle: 'monthly' },
+    ...order,
+  });
+  rzpMock.paymentsFetch.mockReset().mockResolvedValue({
+    id: PAYMENT,
+    order_id: ORDER,
+    status: 'captured',
+    amount: 30000,
+    created_at: Math.floor(Date.now() / 1000) - 30,
+    ...payment,
+  });
+}
+
 function makePrismaMock() {
   return {
     account: { findUnique: vi.fn() },
     subscription_plans: { findUnique: vi.fn() },
-    user_subscriptions: { upsert: vi.fn() },
+    user_subscriptions: {
+      upsert: vi.fn(),
+      findUnique: vi.fn().mockResolvedValue(null),
+      findFirst: vi.fn().mockResolvedValue(null),
+    },
   };
 }
 
@@ -69,7 +108,10 @@ describe('RazorpayController.confirmPayment', () => {
     prisma.account.findUnique.mockResolvedValue({ ownerUserId: 'owner-1' });
     prisma.subscription_plans.findUnique.mockResolvedValue({
       id: 'plan-starter',
+      price_monthly: 300,
+      price_yearly: 3000,
     });
+    mockGateway();
 
     controller = new RazorpayController(prisma as unknown as PrismaService);
   });
@@ -181,6 +223,11 @@ describe('RazorpayController.confirmPayment', () => {
   });
 
   it('bills a year ahead on the yearly cycle', async () => {
+    mockGateway({
+      amount: 300000,
+      amount_paid: 300000,
+      notes: { userId: 'owner-1', planName: 'STARTER', billingCycle: 'yearly' },
+    }, { amount: 300000 });
     await controller.confirmPayment(ACCOUNT, body({ billingCycle: 'yearly' }));
 
     const call = prisma.user_subscriptions.upsert.mock
@@ -217,5 +264,101 @@ describe('RazorpayController.confirmPayment', () => {
     ).rejects.toThrow(/Invalid plan name/);
 
     expect(prisma.user_subscriptions.upsert).not.toHaveBeenCalled();
+  });
+
+  describe('binding to the real order (H-1)', () => {
+    async function expectRejected(
+      b: Record<string, unknown> = {},
+      match?: RegExp | string,
+    ) {
+      const p = controller.confirmPayment(ACCOUNT, body(b));
+      await expect(p).rejects.toThrow(match as never);
+      expect(prisma.user_subscriptions.upsert).not.toHaveBeenCalled();
+    }
+
+    it('rejects a payment that was not captured', async () => {
+      mockGateway({}, { status: 'authorized' });
+      await expectRejected();
+    });
+
+    it('rejects an order that is not fully paid', async () => {
+      mockGateway({ amount_paid: 0 });
+      await expectRejected();
+    });
+
+    it('rejects a payment belonging to a different order', async () => {
+      mockGateway({}, { order_id: 'order_other' });
+      await expectRejected();
+    });
+
+    it('rejects relabelling a Starter payment as Growth', async () => {
+      prisma.subscription_plans.findUnique.mockResolvedValue({
+        id: 'plan-growth',
+        price_monthly: 900,
+        price_yearly: 9000,
+      });
+      await expectRejected({ planName: 'GROWTH' });
+    });
+
+    it('rejects relabelling a monthly payment as yearly', async () => {
+      await expectRejected({ billingCycle: 'yearly' });
+    });
+
+    it('rejects an order created by someone else', async () => {
+      mockGateway({
+        notes: { userId: 'attacker', planName: 'STARTER', billingCycle: 'monthly' },
+      });
+      await expectRejected();
+    });
+
+    it('rejects an AI-credit order passed off as a plan payment', async () => {
+      mockGateway({
+        notes: {
+          kind: 'ai_credits',
+          userId: 'owner-1',
+          planName: 'STARTER',
+          billingCycle: 'monthly',
+        },
+      });
+      await expectRejected();
+    });
+
+    it('rejects when the order amount is not the current plan price', async () => {
+      prisma.subscription_plans.findUnique.mockResolvedValue({
+        id: 'plan-starter',
+        price_monthly: 500,
+        price_yearly: 5000,
+      });
+      await expectRejected();
+    });
+
+    it('rejects a stale payment (replay of an old triple)', async () => {
+      mockGateway({}, { created_at: Math.floor(Date.now() / 1000) - 3 * 3600 });
+      await expectRejected();
+    });
+
+    it('is idempotent: the same order already applied is a no-op', async () => {
+      prisma.user_subscriptions.findUnique.mockResolvedValue({
+        razorpay_subscription_id: ORDER,
+        status: 'active',
+      });
+      await expect(controller.confirmPayment(ACCOUNT, body())).resolves.toEqual({
+        success: true,
+        planName: 'STARTER',
+      });
+      expect(prisma.user_subscriptions.upsert).not.toHaveBeenCalled();
+    });
+
+    it('refuses an order already applied to another subscription row', async () => {
+      prisma.user_subscriptions.findFirst.mockResolvedValue({ user_id: 'x' });
+      await expectRejected();
+    });
+
+    it('create-order rejects a billing cycle that is not monthly|yearly', async () => {
+      await expect(
+        controller.createOrder(ACCOUNT, { planName: 'STARTER', billingCycle: 'weekly' }),
+      ).rejects.toThrow(/Invalid billing cycle/);
+      expect(rzpMock.ordersCreate).not.toHaveBeenCalled();
+    });
   });
 });

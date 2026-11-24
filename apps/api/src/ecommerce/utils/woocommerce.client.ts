@@ -1,3 +1,6 @@
+import { safeFetch } from '../../ai/lib/http-guard';
+import { normalizeStoreUrl } from './store-url.util';
+
 export interface WooCommerceProduct {
   id: number;
   name: string;
@@ -35,36 +38,36 @@ export class WooCommerceClient {
   private consumerSecret: string;
 
   constructor(storeUrl: string, consumerKey: string, consumerSecret: string) {
-    this.storeUrl = storeUrl.replace(/\/$/, '');
+    const normalized = normalizeStoreUrl('woocommerce', storeUrl);
+    if (!normalized) throw new Error('Invalid WooCommerce store URL (https required)');
+    this.storeUrl = normalized;
     this.consumerKey = consumerKey;
     this.consumerSecret = consumerSecret;
   }
 
   private async request(
     endpoint: string,
-    options?: RequestInit,
-  ): Promise<Response> {
+  ): Promise<{ json: () => any }> {
     const url = `${this.storeUrl}/wp-json/wc/v3${endpoint}`;
     const auth = Buffer.from(
       `${this.consumerKey}:${this.consumerSecret}`,
     ).toString('base64');
 
-    const response = await fetch(url, {
-      ...options,
+    const response = await safeFetch({
+      url,
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Basic ${auth}`,
-        ...options?.headers,
       },
+      timeoutMs: 20_000,
+      maxBytes: 8 * 1024 * 1024,
     });
 
-    if (!response.ok) {
-      throw new Error(
-        `WooCommerce API error: ${response.status} ${response.statusText}`,
-      );
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`WooCommerce API error: ${response.status}`);
     }
 
-    return response;
+    return { json: () => JSON.parse(response.body) };
   }
 
   async getProducts(perPage = 100, page = 1): Promise<WooCommerceProduct[]> {

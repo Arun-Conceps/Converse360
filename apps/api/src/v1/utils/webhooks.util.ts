@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { isPublicLiteralOrName } from '../../common/security/ssrf.util';
 
 /** Prisma select object for the public-safe columns of webhook_endpoints. */
 export const WEBHOOK_PUBLIC_SELECT = {
@@ -54,6 +55,10 @@ export function normalizeWebhookUrl(input: unknown): string | null {
   try {
     const u = new URL(trimmed);
     if (u.protocol !== 'https:') return null;
+    // Save-time SSRF screen (no DNS): literal private/loopback/metadata
+    // addresses in ANY spelling and internal hostnames are refused here;
+    // hostnames are re-checked and address-pinned at delivery.
+    if (!isPublicLiteralOrName(u.toString())) return null;
     return u.toString();
   } catch {
     return null;

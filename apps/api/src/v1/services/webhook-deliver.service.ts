@@ -4,6 +4,11 @@ import type { Queue } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
 import { decrypt } from '../../common/security/encryption.util';
 import { isDeliverableUrl } from '../../common/security/ssrf.util';
+import {
+  BlockedAddressError,
+  pinnedRequest,
+  readStreamCapped,
+} from '../../common/security/pinned-http';
 import { buildSignatureHeader } from '../utils/webhook-sign.util';
 import { randomUUID } from 'node:crypto';
 import {
@@ -22,8 +27,40 @@ interface EndpointRow {
 
 export interface TestPingResult {
   ok: boolean;
+  /** Deliberately never populated: a status code is a port-scan oracle. */
   status?: number;
   error?: string;
+}
+
+/**
+ * POST through the address-pinned client (re-validates the address that is
+ * actually dialled, closing DNS rebinding) and drain a bounded amount of the
+ * body so the socket is released. Redirects are never followed.
+ */
+async function postPinned(
+  rawUrl: string,
+  headers: Record<string, string>,
+  body: string,
+): Promise<{ status: number; ok: boolean }> {
+  const res = await pinnedRequest({
+    url: new URL(rawUrl),
+    method: 'POST',
+    headers,
+    body,
+    timeoutMs: DELIVERY_TIMEOUT_MS,
+  });
+  await readStreamCapped(res.stream, 16 * 1024).catch(() => undefined);
+  return { status: res.status, ok: res.status >= 200 && res.status < 300 };
+}
+
+function describeFailure(err: unknown): { blocked: boolean; text: string } {
+  if (err instanceof BlockedAddressError) {
+    return { blocked: true, text: 'endpoint is not publicly reachable' };
+  }
+  if (err instanceof Error && err.name === 'TimeoutError') {
+    return { blocked: false, text: 'endpoint timed out' };
+  }
+  return { blocked: false, text: 'endpoint could not be reached' };
 }
 
 export interface WebhookDeliveryJobData {
@@ -173,9 +210,9 @@ export class WebhookDeliverService {
     const tsSeconds = Math.floor(Date.now() / 1000);
 
     try {
-      const res = await fetch(row.url, {
-        method: 'POST',
-        headers: {
+      const res = await postPinned(
+        row.url,
+        {
           'Content-Type': 'application/json',
           'X-Converse360-Event': job.event,
           'X-Converse360-Webhook-Id': row.id,
@@ -185,10 +222,8 @@ export class WebhookDeliverService {
             tsSeconds,
           ),
         },
-        body: job.payload,
-        redirect: 'manual',
-        signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
-      });
+        job.payload,
+      );
 
       if (!res.ok) {
         return {
@@ -208,9 +243,10 @@ export class WebhookDeliverService {
       });
       return { ok: true, retryable: false };
     } catch (err) {
-      // Timeout, DNS, connection reset — all worth another try.
-      const message = err instanceof Error ? err.message : String(err);
-      return { ok: false, retryable: true, error: message };
+      // Timeout, DNS, connection reset — all worth another try, except a
+      // refusal at connect time (rebinding), which will not improve.
+      const f = describeFailure(err);
+      return { ok: false, retryable: !f.blocked, error: f.text };
     }
   }
 
@@ -265,9 +301,9 @@ export class WebhookDeliverService {
     // reports success because it enqueued successfully would tell them
     // nothing about their endpoint.
     try {
-      const res = await fetch(row.url, {
-        method: 'POST',
-        headers: {
+      const res = await postPinned(
+        row.url,
+        {
           'Content-Type': 'application/json',
           'X-Converse360-Event': 'zapier.test',
           'X-Converse360-Webhook-Id': row.id,
@@ -277,24 +313,16 @@ export class WebhookDeliverService {
             tsSeconds,
           ),
         },
-        body: payload,
-        redirect: 'manual',
-        signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
-      });
+        payload,
+      );
 
-      if (!res.ok) {
-        return {
-          ok: false,
-          status: res.status,
-          error: `Endpoint responded ${res.status}`,
-        };
-      }
-      return { ok: true, status: res.status };
+      // Generic outcome only: the exact status or error text of an
+      // arbitrary host would let a webhook URL be used to probe it.
+      return res.ok
+        ? { ok: true }
+        : { ok: false, error: 'The endpoint did not accept the test event' };
     } catch (err) {
-      return {
-        ok: false,
-        error: err instanceof Error ? err.message : 'Request failed',
-      };
+      return { ok: false, error: describeFailure(err).text };
     }
   }
 

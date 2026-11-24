@@ -13,6 +13,12 @@ import { RequireRole } from '../../auth/decorators/require-role.decorator';
 import { CurrentAccount } from '../../auth/decorators/current-account.decorator';
 import type { SupabaseAccountContext } from '../../auth/types/account-context.type';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  expectedAmountPaise,
+  fetchCapturedPayment,
+  isBillingCycle,
+  MAX_CONFIRM_AGE_SECONDS,
+} from '../razorpay-payment.util';
 
 /**
  * Plan checkout via Razorpay.
@@ -94,6 +100,11 @@ export class RazorpayController {
     if (!validPlans.includes(planName)) {
       throw new HttpException('Invalid plan name', HttpStatus.BAD_REQUEST);
     }
+    // Anything but monthly/yearly used to fall through to the YEARLY price
+    // here and to a 1-month period on confirm.
+    if (!isBillingCycle(billingCycle)) {
+      throw new HttpException('Invalid billing cycle', HttpStatus.BAD_REQUEST);
+    }
 
     const { razorpay, keyId } = this.getRazorpayInstance();
 
@@ -108,11 +119,13 @@ export class RazorpayController {
         throw new HttpException('Plan not found', HttpStatus.NOT_FOUND);
       }
 
-      const amount =
-        billingCycle === 'monthly'
-          ? Number(plan.price_monthly ?? 0)
-          : Number(plan.price_yearly ?? 0);
-      const amountInPaise = Math.round(amount * 100);
+      const amountInPaise = expectedAmountPaise(plan, billingCycle);
+      if (amountInPaise <= 0) {
+        throw new HttpException(
+          'Plan has no price for this billing cycle',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
 
       // 2. Create order via SDK
       const order = await razorpay.orders.create({
@@ -202,7 +215,11 @@ export class RazorpayController {
       throw new HttpException('Invalid plan name', HttpStatus.BAD_REQUEST);
     }
 
-    const { keySecret } = this.getRazorpayInstance();
+    if (!isBillingCycle(billingCycle)) {
+      throw new HttpException('Invalid billing cycle', HttpStatus.BAD_REQUEST);
+    }
+
+    const { razorpay, keySecret } = this.getRazorpayInstance();
     const expected = createHmac('sha256', keySecret)
       .update(`${razorpayOrderId.trim()}|${razorpayPaymentId.trim()}`)
       .digest('hex');
@@ -220,13 +237,83 @@ export class RazorpayController {
       const [plan, ownerUserId] = await Promise.all([
         this.prisma.subscription_plans.findUnique({
           where: { name: planName },
-          select: { id: true },
+          select: { id: true, price_monthly: true, price_yearly: true },
         }),
         this.getOwnerUserId(account.accountId),
       ]);
 
       if (!plan) {
         throw new HttpException('Plan not found', HttpStatus.NOT_FOUND);
+      }
+
+      /**
+       * THE SIGNATURE ONLY PROVES "Razorpay signed this order|payment pair".
+       * planName / billingCycle come from the body, so a genuine Starter
+       * monthly payment could be re-labelled Growth yearly, and the same
+       * triple replayed later. Re-read the order and payment from Razorpay
+       * and bind everything to what WE put in the order notes.
+       */
+      const trimmedOrderId = razorpayOrderId.trim();
+      const trimmedPaymentId = razorpayPaymentId.trim();
+      const { order } = await fetchCapturedPayment(
+        razorpay,
+        trimmedOrderId,
+        trimmedPaymentId,
+        { maxAgeSeconds: MAX_CONFIRM_AGE_SECONDS },
+      );
+
+      const notes = (order.notes ?? {}) as Record<string, unknown>;
+      if (
+        notes.kind ||
+        notes.userId !== ownerUserId ||
+        notes.planName !== planName ||
+        notes.billingCycle !== billingCycle
+      ) {
+        throw new HttpException(
+          { error: 'Payment does not match this plan.', code: 'order_mismatch' },
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+      if (Number(order.amount) !== expectedAmountPaise(plan, billingCycle)) {
+        throw new HttpException(
+          {
+            error: 'Payment amount does not match the plan price.',
+            code: 'amount_mismatch',
+          },
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+
+      // Idempotency WITHOUT a schema change: `razorpay_subscription_id`
+      // already stores the order id of the payment that bought the current
+      // period (the webhook writes the same value). Same order already
+      // applied => no-op, so a replayed callback or the webhook landing
+      // first cannot extend the period; an order applied to ANOTHER user's
+      // row is refused outright.
+      const [mine, elsewhere] = await Promise.all([
+        this.prisma.user_subscriptions.findUnique({
+          where: { user_id: ownerUserId },
+          select: { razorpay_subscription_id: true, status: true },
+        }),
+        this.prisma.user_subscriptions.findFirst({
+          where: {
+            razorpay_subscription_id: trimmedOrderId,
+            user_id: { not: ownerUserId },
+          },
+          select: { user_id: true },
+        }),
+      ]);
+      if (elsewhere) {
+        throw new HttpException(
+          { error: 'Payment already used.', code: 'already_used' },
+          HttpStatus.CONFLICT,
+        );
+      }
+      if (
+        mine?.razorpay_subscription_id === trimmedOrderId &&
+        mine.status === 'active'
+      ) {
+        return { success: true, planName };
       }
 
       // A paid period starts the moment it is paid for. No trial window is
@@ -240,11 +327,11 @@ export class RazorpayController {
       const paid = {
         plan_id: plan.id,
         status: 'active' as const,
-        billing_cycle: billingCycle as 'monthly' | 'yearly',
+        billing_cycle: billingCycle,
         current_period_start: now,
         current_period_end: periodEnd,
         cancel_at_period_end: false,
-        razorpay_subscription_id: razorpayOrderId,
+        razorpay_subscription_id: trimmedOrderId,
         payment_method: 'razorpay' as const,
       };
 

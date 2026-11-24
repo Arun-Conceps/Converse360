@@ -6,6 +6,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
@@ -14,6 +15,9 @@ import { SupabaseAuthGuard } from '../auth/guards/supabase-auth.guard';
 import { RequireRole } from '../auth/decorators/require-role.decorator';
 import { CurrentAccount } from '../auth/decorators/current-account.decorator';
 import type { SupabaseAccountContext } from '../auth/types/account-context.type';
+import type { Request } from 'express';
+import { RateLimitService } from '../common/rate-limit/rate-limit.service';
+import { enforceRateLimit, requestIp } from './form-public-guard';
 import { BookingService, type BookingJson } from './services/booking.service';
 
 class SetBookingStatusDto {
@@ -89,10 +93,29 @@ export class BookingsController {
  */
 @Controller('public/bookings')
 export class BookingsPublicController {
-  constructor(private readonly bookings: BookingService) {}
+  constructor(
+    private readonly bookings: BookingService,
+    private readonly rateLimit: RateLimitService,
+  ) {}
+
+  /**
+   * The token is the only credential, so guessing it must be expensive:
+   * per-IP buckets on every route, tighter on the writes.
+   */
+  private limit(req: Request, bucket: string, perMinute: number) {
+    return enforceRateLimit(
+      this.rateLimit,
+      `booking:${bucket}:${requestIp(req)}`,
+      perMinute,
+    );
+  }
 
   @Get(':token')
-  async get(@Param('token') token: string): Promise<BookingJson> {
+  async get(
+    @Req() req: Request,
+    @Param('token') token: string,
+  ): Promise<BookingJson> {
+    await this.limit(req, 'get', 20);
     return this.bookings.findByToken(token);
   }
 
@@ -103,24 +126,29 @@ export class BookingsPublicController {
    * cannot browse the availability of forms they were never sent.
    */
   @Get(':token/slots')
-  async slots(@Param('token') token: string) {
+  async slots(@Req() req: Request, @Param('token') token: string) {
+    await this.limit(req, 'slots', 20);
     const booking = await this.bookings.findByToken(token);
     return this.bookings.slotsFor(booking.form_id);
   }
 
   @Post(':token/reschedule')
   async reschedule(
+    @Req() req: Request,
     @Param('token') token: string,
     @Body() body: PublicRescheduleDto,
   ): Promise<BookingJson> {
+    await this.limit(req, 'reschedule', 10);
     return this.bookings.reschedule(token, body.start);
   }
 
   @Post(':token/cancel')
   async cancel(
+    @Req() req: Request,
     @Param('token') token: string,
     @Body() body: PublicCancelDto,
   ): Promise<BookingJson> {
+    await this.limit(req, 'cancel', 10);
     return this.bookings.cancel(token, body.reason);
   }
 }

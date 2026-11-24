@@ -653,4 +653,26 @@ describe('validateFlowForActivation — new node types', () => {
       ]).filter((i) => i.severity === 'error'),
     ).toEqual([]);
   });
+
+  it('rejects a start_flow that points at the flow itself', () => {
+    const issues = validateFlowForActivation(
+      { ...validFlow, id: 'flow-self', entry_node_id: 's' },
+      [
+        { node_key: 's', node_type: 'start', config: { next_node_key: 'n' } },
+        { node_key: 'n', node_type: 'start_flow', config: { flow_id: 'flow-self' } },
+      ],
+    );
+    expect(
+      issues.some((i) => i.severity === 'error' && i.field === 'flow_id'),
+    ).toBe(true);
+    expect(
+      validateFlowForActivation(
+        { ...validFlow, id: 'flow-self', entry_node_id: 's' },
+        [
+          { node_key: 's', node_type: 'start', config: { next_node_key: 'n' } },
+          { node_key: 'n', node_type: 'start_flow', config: { flow_id: 'other' } },
+        ],
+      ).filter((i) => i.severity === 'error'),
+    ).toEqual([]);
+  });
 });

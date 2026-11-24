@@ -83,6 +83,9 @@ import { safeFetch } from '../../ai/lib/http-guard';
  * ignored. Only Meta send failures fail the run (with a matching
  * `error` event + `failed` status).
  */
+/** Max start_flow hops in one chain (A -> B -> C -> D). */
+export const MAX_START_FLOW_CHAIN_DEPTH = 3;
+
 @Injectable()
 export class FlowDispatchService {
   private readonly logger = new Logger(FlowDispatchService.name);
@@ -644,7 +647,24 @@ export class FlowDispatchService {
     run: FlowRun,
     node: FlowNode,
     cfg: StartFlowNodeConfig,
+    chainDepth = 0,
   ): Promise<{ outcome: 'advanced' | 'completed' | 'handed_off' }> {
+    // ⚠️ Each nested advance has its own 64-step safety counter, so
+    // start_flow(A) inside A (or A -> B -> A) would recurse without bound.
+    // The depth is threaded through and capped; past the cap the run ends
+    // cleanly (never throws into the webhook) with a recorded reason.
+    if (chainDepth >= MAX_START_FLOW_CHAIN_DEPTH) {
+      this.logger.warn(
+        `start_flow chain depth ${chainDepth} reached on run ${run.id}; stopping`,
+      );
+      await this.logEvent(run.id, 'error', node.nodeKey, {
+        reason: 'start_flow_chain_too_deep',
+        flow_id: cfg.flow_id,
+        max_depth: MAX_START_FLOW_CHAIN_DEPTH,
+      });
+      await this.endRun(run.id, 'failed', 'start_flow_chain_too_deep');
+      return { outcome: 'completed' };
+    }
     // End FIRST. `idx_one_active_run_per_contact` permits exactly one
     // active run per contact, so starting the target before ending this
     // one violates it and loses the customer entirely.
@@ -664,6 +684,7 @@ export class FlowDispatchService {
       contactId: run.contactId!,
       conversationId: run.conversationId!,
       userId: run.userId,
+      chainDepth: chainDepth + 1,
     });
 
     if (!started.consumed) {
@@ -838,6 +859,7 @@ export class FlowDispatchService {
     startNodeKey: string,
     nodes: Map<string, FlowNode>,
     vars: Record<string, unknown>,
+    chainDepth = 0,
   ): Promise<{ outcome: 'advanced' | 'completed' | 'handed_off' }> {
     // Build flow context once for all interpolation in this run.
     // This includes contact fields so {{contact.name}} works, not just {{vars.x}}.
@@ -1258,7 +1280,7 @@ export class FlowDispatchService {
       }
       if (node.nodeType === 'start_flow') {
         const cfg = node.config as unknown as StartFlowNodeConfig;
-        return this.executeStartFlow(run, node, cfg);
+        return this.executeStartFlow(run, node, cfg, chainDepth);
       }
       if (node.nodeType === 'ai_handoff') {
         const cfg = node.config as unknown as AiHandoffNodeConfig;
@@ -1676,6 +1698,8 @@ export class FlowDispatchService {
     conversationId: string;
     /** Sender-of-record for the flow's outbound prompts. */
     userId: string;
+    /** How many start_flow hops led here. Callers outside the engine omit it. */
+    chainDepth?: number;
   }): Promise<DispatchInboundResult> {
     try {
       const flow = await this.prisma.flow.findFirst({
@@ -1714,6 +1738,7 @@ export class FlowDispatchService {
           isFirstInboundMessage: false,
         },
         nodes,
+        input.chainDepth ?? 0,
       );
     } catch (err) {
       this.logger.error(
@@ -1727,6 +1752,7 @@ export class FlowDispatchService {
     flow: Flow,
     input: DispatchInboundInput,
     nodes: Map<string, FlowNode>,
+    chainDepth = 0,
   ): Promise<DispatchInboundResult> {
     // INSERT — partial unique index `idx_one_active_run_per_contact`
     // catches concurrent inserts with 23505 (Prisma P2002). We catch
@@ -1795,6 +1821,7 @@ export class FlowDispatchService {
       flow.entryNodeId!,
       nodes,
       (run.vars ?? {}) as Record<string, unknown>,
+      chainDepth,
     );
     return {
       consumed: true,

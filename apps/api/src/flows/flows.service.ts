@@ -268,6 +268,7 @@ export class FlowsService {
       });
       const issues = validateFlowForActivation(
         {
+          id: flow.id,
           name: flow.name,
           trigger_type: flow.triggerType as FlowTriggerType,
           trigger_config: (flow.triggerConfig ?? {}) as Record<string, unknown>,

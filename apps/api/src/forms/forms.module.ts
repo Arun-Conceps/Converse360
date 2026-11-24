@@ -29,10 +29,7 @@ import {
 } from './bookings.controller';
 
 @Module({
-  imports: [
-    forwardRef(() => AutomationsModule),
-    forwardRef(() => V1Module),
-  ],
+  imports: [forwardRef(() => AutomationsModule), forwardRef(() => V1Module)],
   controllers: [
     FormsController,
     FormsPublicController,

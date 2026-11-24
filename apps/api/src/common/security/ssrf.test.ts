@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { lookup } from 'node:dns/promises';
-import { isDeliverableUrl, isPrivateOrReservedIp } from './ssrf.util';
+import {
+  isDeliverableUrl,
+  isPrivateOrReservedIp,
+  isPublicLiteralOrName,
+} from './ssrf.util';
 
 vi.mock('node:dns/promises', () => ({ lookup: vi.fn() }));
 
@@ -79,5 +83,67 @@ describe('isDeliverableUrl', () => {
 
   it('accepts a literal public IP', async () => {
     expect(await isDeliverableUrl('http://8.8.8.8/hook')).toBe(true);
+  });
+});
+
+describe('isDeliverableUrl bypass table', () => {
+  const bad = [
+    'http://[::ffff:127.0.0.1]/',
+    'http://[::ffff:7f00:1]/',
+    'http://[::ffff:a9fe:a9fe]/latest/meta-data',
+    'http://[0:0:0:0:0:ffff:7f00:1]/',
+    'http://[::FFFF:7F00:1]/',
+    'http://[64:ff9b::7f00:1]/',
+    'http://[64:ff9b::169.254.169.254]/',
+    'http://[2002:7f00:1::]/',
+    'http://[2002:a9fe:a9fe::]/',
+    'http://[::7f00:1]/',
+    'http://[fec0::1]/',
+    'http://[fd00::1]/',
+    'http://192.0.0.1/',
+    'http://198.18.0.1/',
+    'http://198.19.5.5/',
+    'http://224.0.0.1/',
+    'http://240.0.0.1/',
+    'http://255.255.255.255/',
+    'http://100.64.0.1/',
+    'http://0x7f.1/',
+    'http://2130706433/',
+    'http://metadata.google.internal/computeMetadata/v1/',
+    'http://localhost./',
+    'ftp://example.com/',
+    'http://user:pw@8.8.8.8/',
+  ];
+  it.each(bad)('rejects %s', async (u) => {
+    expect(await isDeliverableUrl(u)).toBe(false);
+  });
+
+  it('accepts public literals incl. mapped public v4', async () => {
+    expect(await isDeliverableUrl('https://[2606:4700:4700::1111]/')).toBe(true);
+    expect(await isDeliverableUrl('https://[::ffff:8.8.8.8]/')).toBe(true);
+  });
+
+  it('rejects a name resolving to a hex-mapped loopback', async () => {
+    vi.mocked(lookup).mockResolvedValue([
+      { address: '::ffff:7f00:1', family: 6 },
+    ] as never);
+    expect(await isDeliverableUrl('http://rebind.example.com/')).toBe(false);
+  });
+
+  it('rejects when ANY resolved address is private', async () => {
+    vi.mocked(lookup).mockResolvedValue([
+      { address: '8.8.8.8', family: 4 },
+      { address: '64:ff9b::a00:1', family: 6 },
+    ] as never);
+    expect(await isDeliverableUrl('http://mixed.example.com/')).toBe(false);
+  });
+});
+
+describe('isPublicLiteralOrName', () => {
+  it('is DNS-free and screens literals and names', () => {
+    expect(isPublicLiteralOrName('https://example.com/h')).toBe(true);
+    expect(isPublicLiteralOrName('https://[::ffff:7f00:1]/h')).toBe(false);
+    expect(isPublicLiteralOrName('https://localhost/h')).toBe(false);
+    expect(isPublicLiteralOrName('nope')).toBe(false);
   });
 });

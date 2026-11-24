@@ -1,5 +1,6 @@
 'use client';
 
+import { safeRedirectTarget } from '@/lib/forms/redirect';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import {
@@ -77,6 +78,8 @@ export interface PublicFormField {
 }
 
 export interface PublicForm {
+  /** Server-issued render timestamp token; echoed back as spam.token. */
+  spam_token?: string;
   id: string;
   name: string;
   description?: string | null;
@@ -124,7 +127,7 @@ export interface FormSubmitResult {
 
 export interface FormSubmitPayload {
   answers: Record<string, unknown>;
-  spam: { elapsedMs: number };
+  spam: { elapsedMs: number; token?: string };
 }
 
 interface FormRendererProps {
@@ -312,7 +315,11 @@ export default function FormRenderer({
 
       const payload: FormSubmitPayload = {
         answers: visibleAnswers,
-        spam: { elapsedMs: Date.now() - startTime },
+        spam: {
+          elapsedMs: Date.now() - startTime,
+          // Server-issued at render; lets the API check the timing itself.
+          ...(form.spam_token ? { token: form.spam_token } : {}),
+        },
       };
 
       const result = onSubmit
@@ -324,8 +331,15 @@ export default function FormRenderer({
       // report as an error.
       if (!result) return;
 
-      if (result.successMode === 'redirect' && result.redirectUrl) {
-        window.location.href = result.redirectUrl;
+      // Only an absolute http(s) URL may be navigated to: a stored
+      // `javascript:` value would otherwise run on this origin. Anything
+      // else falls through to the thank-you message.
+      const redirectTarget =
+        result.successMode === 'redirect'
+          ? safeRedirectTarget(result.redirectUrl)
+          : null;
+      if (redirectTarget) {
+        window.location.href = redirectTarget;
         return;
       }
 

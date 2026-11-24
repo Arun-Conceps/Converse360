@@ -6,6 +6,56 @@ import Stripe from 'stripe';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ownedAccountId } from '../owned-account.util';
 import { AiCreditsService } from '../../ai/credits/ai-credits.service';
+import { expectedAmountPaise, isBillingCycle } from '../razorpay-payment.util';
+
+/**
+ * Gateway statuses that mean "the customer is paying / entitled", and the
+ * explicit non-active mapping of everything else. An unknown status must
+ * NOT fall through to `active`: Razorpay halted/paused/expired and Stripe
+ * unpaid/paused/incomplete_expired used to grant access.
+ * Returns null for an unknown status (caller: no change + error log).
+ */
+export function mapRazorpaySubscriptionStatus(
+  s: unknown,
+): 'active' | 'cancelled' | 'past_due' | 'expired' | null {
+  switch (s) {
+    case 'active':
+    case 'completed':
+      return 'active';
+    case 'cancelled':
+      return 'cancelled';
+    case 'pending':
+    case 'halted':
+    case 'paused':
+      return 'past_due';
+    case 'expired':
+      return 'expired';
+    default:
+      return null;
+  }
+}
+
+export function mapStripeSubscriptionStatus(
+  s: unknown,
+): 'active' | 'trial' | 'cancelled' | 'past_due' | 'expired' | null {
+  switch (s) {
+    case 'active':
+      return 'active';
+    case 'trialing':
+      return 'trial';
+    case 'canceled':
+      return 'cancelled';
+    case 'past_due':
+    case 'unpaid':
+    case 'paused':
+      return 'past_due';
+    case 'incomplete':
+    case 'incomplete_expired':
+      return 'expired';
+    default:
+      return null;
+  }
+}
 
 @Controller('webhooks')
 export class SubscriptionWebhooksController {
@@ -28,6 +78,17 @@ export class SubscriptionWebhooksController {
     const signature = req.headers['x-razorpay-signature'] as string | undefined;
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || '';
 
+    // FAIL CLOSED: with no secret configured the signature check used to be
+    // skipped, so anyone could POST a forged "payment captured".
+    if (!webhookSecret) {
+      this.logger.error(
+        'Razorpay webhook: RAZORPAY_WEBHOOK_SECRET is not configured; refusing',
+      );
+      return res
+        .status(HttpStatus.SERVICE_UNAVAILABLE)
+        .json({ error: 'Webhook not configured' });
+    }
+
     if (!signature) {
       this.logger.warn('Razorpay webhook: Missing x-razorpay-signature');
       return res
@@ -39,7 +100,7 @@ export class SubscriptionWebhooksController {
     const bodyStr = rawBody.toString('utf8');
 
     // Verify webhook signature with timingSafeEqual
-    if (webhookSecret) {
+    {
       const expected = createHmac('sha256', webhookSecret)
         .update(bodyStr)
         .digest('hex');
@@ -61,12 +122,24 @@ export class SubscriptionWebhooksController {
       this.logger.log(`Received Razorpay webhook event: ${event.event}`);
 
       switch (event.event) {
-        case 'payment.authorized':
+        // payment.authorized is NOT money: the card is held, not charged,
+        // and an uncaptured authorization auto-refunds. Captured only.
         case 'payment.captured':
         case 'order.paid': {
-          const payment =
-            event.payload.payment?.entity || event.payload.order?.entity;
-          const notes = payment?.notes;
+          const paymentEntity = event.payload.payment?.entity;
+          const orderEntity = event.payload.order?.entity;
+          const payment = paymentEntity || orderEntity;
+          const notes = payment?.notes ?? orderEntity?.notes;
+
+          if (paymentEntity && paymentEntity.status !== 'captured') {
+            this.logger.warn(
+              `Razorpay webhook: ignoring payment ${paymentEntity.id} with status ${paymentEntity.status}`,
+            );
+            return res.status(HttpStatus.OK).json({ received: true });
+          }
+          if (!paymentEntity && orderEntity && orderEntity.status !== 'paid') {
+            return res.status(HttpStatus.OK).json({ received: true });
+          }
 
           // An AI credit top-up is a one-time payment on the same
           // webhook as plan payments, told apart by the `kind` note we
@@ -100,16 +173,64 @@ export class SubscriptionWebhooksController {
             return res.status(HttpStatus.OK).json({ received: true });
           }
 
-          const { userId, planName, billingCycle } = notes;
+          const { planName, billingCycle } = notes;
+
+          if (!isBillingCycle(billingCycle)) {
+            this.logger.error(
+              `Razorpay webhook: invalid billing cycle ${String(billingCycle)}`,
+            );
+            return res.status(HttpStatus.OK).json({ received: true });
+          }
 
           // Get plan ID
           const plan = await this.prisma.subscription_plans.findUnique({
             where: { name: planName },
-            select: { id: true, trial_days: true },
+            select: {
+              id: true,
+              trial_days: true,
+              price_monthly: true,
+              price_yearly: true,
+            },
           });
 
           if (!plan) {
             this.logger.error(`Razorpay webhook: Plan not found: ${planName}`);
+            return res.status(HttpStatus.OK).json({ received: true });
+          }
+
+          // The amount actually charged must be the plan's current price.
+          const paidAmount = Number(
+            paymentEntity?.amount ?? orderEntity?.amount_paid,
+          );
+          if (paidAmount !== expectedAmountPaise(plan, billingCycle)) {
+            this.logger.error(
+              `Razorpay webhook: amount ${paidAmount} does not match ${planName}/${billingCycle}; ignoring`,
+            );
+            return res.status(HttpStatus.OK).json({ received: true });
+          }
+
+          // The write targets the workspace OWNER's row. notes.userId is who
+          // created the order; it must still own a workspace.
+          const userId = String(notes.userId);
+          const ownedId = await ownedAccountId(this.prisma, userId);
+          if (!ownedId) {
+            this.logger.error(
+              `Razorpay webhook: user ${userId} owns no workspace; ignoring`,
+            );
+            return res.status(HttpStatus.OK).json({ received: true });
+          }
+
+          // Idempotent on the order id: confirm-payment (or an earlier
+          // delivery) already applied this payment.
+          const orderRef = payment.order_id || payment.id;
+          const current = await this.prisma.user_subscriptions.findUnique({
+            where: { user_id: userId },
+            select: { razorpay_subscription_id: true, status: true },
+          });
+          if (
+            current?.razorpay_subscription_id === orderRef &&
+            current?.status === 'active'
+          ) {
             return res.status(HttpStatus.OK).json({ received: true });
           }
 
@@ -295,16 +416,13 @@ export class SubscriptionWebhooksController {
         case 'subscription.updated': {
           const subscription = event.payload.subscription.entity;
 
-          const dbStatus =
-            subscription.status === 'active'
-              ? 'active'
-              : subscription.status === 'completed'
-                ? 'active'
-                : subscription.status === 'cancelled'
-                  ? 'cancelled'
-                  : subscription.status === 'pending'
-                    ? 'past_due'
-                    : 'active';
+          const dbStatus = mapRazorpaySubscriptionStatus(subscription.status);
+          if (!dbStatus) {
+            this.logger.error(
+              `Razorpay webhook: unknown subscription status "${subscription.status}" for ${subscription.id}; no change`,
+            );
+            return res.status(HttpStatus.OK).json({ received: true });
+          }
 
           await this.prisma.user_subscriptions.updateMany({
             where: { razorpay_subscription_id: subscription.id },
@@ -388,6 +506,17 @@ export class SubscriptionWebhooksController {
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || '';
     const stripeSecretKey = process.env.STRIPE_SECRET_KEY || '';
 
+    // FAIL CLOSED: an empty secret passed to constructEvent verifies
+    // signatures made with an empty key, i.e. forgeable by anyone.
+    if (!webhookSecret) {
+      this.logger.error(
+        'Stripe webhook: STRIPE_WEBHOOK_SECRET is not configured; refusing',
+      );
+      return res
+        .status(HttpStatus.SERVICE_UNAVAILABLE)
+        .json({ error: 'Webhook not configured' });
+    }
+
     if (!signature) {
       this.logger.warn('Stripe webhook: Missing stripe-signature');
       return res
@@ -427,6 +556,11 @@ export class SubscriptionWebhooksController {
           const planName = session.metadata?.planName;
           const billingCycle = session.metadata?.billingCycle;
 
+          if (session.payment_status === 'unpaid') {
+            this.logger.warn('Stripe webhook: checkout session is unpaid');
+            return res.status(HttpStatus.OK).json({ received: true });
+          }
+
           if (!userId || !planName || !billingCycle) {
             this.logger.error(
               'Stripe webhook: Missing metadata in checkout session',
@@ -463,6 +597,15 @@ export class SubscriptionWebhooksController {
             // phase 1 and what replaces it.
             ownedAccountId(this.prisma, userId),
           ]);
+
+          // The row is the workspace OWNER's. metadata.userId must resolve to
+          // an owner of a workspace; a user who owns nothing gets no row.
+          if (!accountId) {
+            this.logger.error(
+              `Stripe webhook: user ${userId} owns no workspace; ignoring`,
+            );
+            return res.status(HttpStatus.OK).json({ received: true });
+          }
 
           const onboarding = accountId
             ? await this.prisma.account_onboarding.findUnique({
@@ -565,21 +708,18 @@ export class SubscriptionWebhooksController {
             return res.status(HttpStatus.OK).json({ received: true });
           }
 
-          const dbStatus =
-            subscription.status === 'trialing'
-              ? 'trial'
-              : subscription.status === 'past_due'
-                ? 'past_due'
-                : subscription.status === 'canceled'
-                  ? 'cancelled'
-                  : subscription.status === 'incomplete'
-                    ? 'expired'
-                    : 'active';
+          const dbStatus = mapStripeSubscriptionStatus(subscription.status);
+          if (!dbStatus) {
+            this.logger.error(
+              `Stripe webhook: unknown subscription status "${subscription.status}" for ${subscription.id}; no change`,
+            );
+            return res.status(HttpStatus.OK).json({ received: true });
+          }
 
           await this.prisma.user_subscriptions.updateMany({
             where: { stripe_subscription_id: subscription.id },
             data: {
-              status: dbStatus as any,
+              status: dbStatus,
               current_period_start: new Date(
                 subscription.current_period_start * 1000,
               ),

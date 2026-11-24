@@ -10,6 +10,7 @@ import {
 } from "@/lib/inbox/conversations";
 import type { Conversation, Message, Contact, ConversationStatus } from "@/types";
 import { useRealtime } from "@/hooks/use-realtime";
+import { rowBelongsToWorkspace } from "@/lib/workspace/realtime-scope";
 import { useAuth } from "@/hooks/use-auth";
 import { useInboxPresence } from "@/hooks/use-inbox-presence";
 import { occupiedConversationIds, viewersOf } from "@/lib/inbox/collision";
@@ -97,6 +98,15 @@ export default function InboxPage() {
   // new conversation even when both events arrive within milliseconds.
   const hydratingConvIdsRef = useRef<Set<string>>(new Set());
 
+  // Conversation ids verified NOT to belong to the active workspace. A
+  // message event from another workspace the user is a member of reaches us
+  // (messages has no account_id, so it cannot be filtered at the channel);
+  // remembering the verdict avoids a lookup per message. Reset on switch.
+  const foreignConvIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    foreignConvIdsRef.current = new Set();
+  }, [accountId]);
+
   /**
    * Synchronous mirror of the conversation ids currently in `conversations`
    * state. Event handlers need to know "do we already have this conv?"
@@ -124,6 +134,8 @@ export default function InboxPage() {
   // Also self-heals if a realtime event was missed: callers can invoke
   // this whenever they reference a conversation id they don't recognise.
   const hydrateConversation = useCallback(async (convId: string) => {
+    if (!accountId) return;
+    if (foreignConvIdsRef.current.has(convId)) return;
     if (hydratingConvIdsRef.current.has(convId)) return;
     hydratingConvIdsRef.current.add(convId);
     try {
@@ -132,6 +144,7 @@ export default function InboxPage() {
         .from("conversations")
         .select(CONVERSATION_SELECT)
         .eq("id", convId)
+        .eq("account_id", accountId)
         .maybeSingle();
       if (error) {
         // Supabase errors have non-enumerable properties — log fields
@@ -144,8 +157,16 @@ export default function InboxPage() {
         });
         return;
       }
-      if (!data) return;
+      if (!data) {
+        // Not in this workspace (or gone): remember it.
+        foreignConvIdsRef.current.add(convId);
+        return;
+      }
       const fetched = normalizeConversation(data);
+      if (!rowBelongsToWorkspace(fetched, accountId)) {
+        foreignConvIdsRef.current.add(convId);
+        return;
+      }
       setConversations((prev) => {
         const existing = prev.find((c) => c.id === fetched.id);
         if (existing) {
@@ -165,7 +186,7 @@ export default function InboxPage() {
     } finally {
       hydratingConvIdsRef.current.delete(convId);
     }
-  }, []);
+  }, [accountId]);
 
   // Check WhatsApp connection status for the active workspace.
   //
@@ -195,6 +216,10 @@ export default function InboxPage() {
   const handleMessageEvent = useCallback(
     (event: { eventType: string; new: Message; old: Partial<Message> }) => {
       const newMsg = event.new;
+      // messages has no account_id: drop anything for a conversation already
+      // known to be another workspace's. Unknown ids go to hydrateConversation,
+      // which only admits a row that is in this workspace.
+      if (foreignConvIdsRef.current.has(newMsg.conversation_id)) return;
 
       if (event.eventType === "INSERT") {
         // Add to messages if it belongs to active conversation
@@ -269,6 +294,8 @@ export default function InboxPage() {
       old: Partial<Conversation>;
     }) => {
       const conv = event.new;
+      // Defence in depth behind the channel filter.
+      if (!rowBelongsToWorkspace(conv, accountId)) return;
 
       if (event.eventType === "INSERT") {
         // Prepend immediately for snappy UX so the new conv shows in the
@@ -320,7 +347,7 @@ export default function InboxPage() {
         }
       }
     },
-    [activeConversation, hydrateConversation]
+    [activeConversation, hydrateConversation, accountId]
   );
 
   // Subscribe to realtime. The `isConnected` flag below feeds the
@@ -345,6 +372,7 @@ export default function InboxPage() {
     (event: { new: Contact }) => {
       const updated = event.new;
       if (!updated?.id) return;
+      if (!rowBelongsToWorkspace(updated, accountId)) return;
 
       setConversations((prev) =>
         prev.map((c) =>
@@ -362,12 +390,13 @@ export default function InboxPage() {
           : prev,
       );
     },
-    [],
+    [accountId],
   );
 
   // throttle) are simply lost. We need a way to catch up.
   const { isConnected } = useRealtime({
     channelName: "inbox-realtime",
+    accountId,
     onMessageEvent: handleMessageEvent,
     onConversationEvent: handleConversationEvent,
     onContactEvent: handleContactEvent,
