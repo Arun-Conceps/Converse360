@@ -132,7 +132,6 @@ export function parseAvailability(value: unknown): Availability | null {
     }
   }
 
-
   // A booking form with no open windows offers nothing. Kept as a valid
   // config rather than null so the settings UI can distinguish "not set up
   // yet" from "closed every day" and say so.
@@ -151,7 +150,6 @@ export function parseAvailability(value: unknown): Availability | null {
       : [],
   };
 }
-
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
