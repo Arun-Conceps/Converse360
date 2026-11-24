@@ -18,9 +18,12 @@ scripts/demo
 apps/api/.env
 apps/api/.env.*
 !apps/api/.env.example
-apps/admin-panel/.env
-apps/admin-panel/.env.*
-!apps/admin-panel/.env.local.example
+
+# DELIBERATELY NOT IGNORED either: apps/admin-panel/.env.local. `next build`
+# collects page data for /export/clients, which imports a module that reads
+# DATABASE_URL at import time, so the build fails without it. Baking it into the
+# image is the pre-existing behaviour; removing that needs those routes to be
+# force-dynamic and the env read deferred to request time.
 
 # DELIBERATELY NOT IGNORED: apps/web/.env.local* — the web image build bakes
 # NEXT_PUBLIC_* values from it (apps/web/Dockerfile COPYs it).
