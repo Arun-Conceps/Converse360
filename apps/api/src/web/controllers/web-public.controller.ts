@@ -24,7 +24,7 @@ import {
 import { WebConfigService } from '../services/web-config.service';
 import { WebSessionService } from '../services/web-session.service';
 import { WebInboundService } from '../services/web-inbound.service';
-import { WebMediaService } from '../services/web-media.service';
+import { WebMediaService, isOwnWebMediaUrl } from '../services/web-media.service';
 import { WebStreamService } from '../services/web-stream.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { isOpenAt, parseBusinessHours } from '../utils/business-hours.util';
@@ -293,6 +293,25 @@ export class WebPublicController {
 
     const hasText = Boolean(body.text?.trim());
     const hasMedia = Boolean(body.media_url);
+    if (hasMedia) {
+      // Only files our own upload endpoint stored for THIS conversation —
+      // a visitor-chosen URL would render third-party content in the inbox.
+      if (
+        typeof body.media_url !== 'string' ||
+        !isOwnWebMediaUrl(
+          body.media_url,
+          request.visitor.accountId,
+          request.visitor.conversationId,
+        )
+      ) {
+        throw new BadRequestException('Invalid media_url.');
+      }
+      if (!body.content_type || body.content_type === 'text') {
+        throw new BadRequestException(
+          'content_type must describe the attached file.',
+        );
+      }
+    }
     if (!hasText && !hasMedia && !body.reply_id) {
       throw new BadRequestException(
         'A message needs text, a file or a choice.',

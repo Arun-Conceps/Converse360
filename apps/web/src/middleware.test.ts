@@ -117,3 +117,22 @@ describe("middleware — refreshed auth cookies survive redirects", () => {
     expect(res.cookies.get(ROTATED.name)?.value).toBe(ROTATED.value);
   });
 });
+
+describe("middleware — deny by default", () => {
+  it.each(["/ads", "/media", "/pricing/x", "/some-new-route"])(
+    "redirects an anonymous visitor on %s to /login",
+    async (path) => {
+      const res = await middleware(new NextRequest(`https://app.test${path}`));
+      expect(res.status).toBe(307);
+      expect(res.headers.get("location")).toContain("/login");
+    },
+  );
+
+  it.each(["/login", "/signup", "/auth/callback", "/join/tok", "/", "/f/x", "/book/x"])(
+    "lets an anonymous visitor load %s",
+    async (path) => {
+      const res = await middleware(new NextRequest(`https://app.test${path}`));
+      expect(res.headers.get("location")).toBeNull();
+    },
+  );
+});

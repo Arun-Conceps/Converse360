@@ -73,3 +73,40 @@ export function checkBasicAuth(
   const passOk = safeEqual(decoded.slice(sep + 1), creds.password);
   return userOk && passOk;
 }
+
+/**
+ * Per-IP failed-attempt throttle for the dashboard login. In-memory: a
+ * restart resets it, which is acceptable for an ops console that is also
+ * behind a reverse proxy.
+ */
+export class AuthThrottle {
+  private readonly failures = new Map<string, number[]>();
+
+  constructor(
+    private readonly maxFailures = 10,
+    private readonly windowMs = 10 * 60 * 1000,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  private recent(key: string): number[] {
+    const cutoff = this.now() - this.windowMs;
+    const list = (this.failures.get(key) ?? []).filter((t) => t > cutoff);
+    if (list.length > 0) this.failures.set(key, list);
+    else this.failures.delete(key);
+    return list;
+  }
+
+  isBlocked(key: string): boolean {
+    return this.recent(key).length >= this.maxFailures;
+  }
+
+  recordFailure(key: string): void {
+    const list = this.recent(key);
+    list.push(this.now());
+    this.failures.set(key, list);
+  }
+
+  reset(key: string): void {
+    this.failures.delete(key);
+  }
+}

@@ -10,6 +10,7 @@ import {
   UseFilters,
   Res,
   HttpStatus,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { ApiKeyGuard } from '../../auth/guards/api-key.guard';
@@ -111,7 +112,7 @@ export class WebhooksController {
   @RequireScope('webhooks:manage')
   async getWebhook(
     @CurrentAccount() ctx: AccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ) {
     const row = await this.prisma.webhook_endpoints.findFirst({
       where: {
@@ -135,7 +136,7 @@ export class WebhooksController {
   @RequireScope('webhooks:manage')
   async updateWebhook(
     @CurrentAccount() ctx: AccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() body: any,
   ) {
     if (!body || typeof body !== 'object') {
@@ -221,7 +222,7 @@ export class WebhooksController {
   @RequireScope('webhooks:manage')
   async deleteWebhook(
     @CurrentAccount() ctx: AccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ) {
     // Verify exists
     const existing = await this.prisma.webhook_endpoints.findFirst({

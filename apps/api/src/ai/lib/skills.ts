@@ -412,7 +412,12 @@ export const AGENT_SKILLS: SkillDefinition[] = [
     description:
       'Triggers workflows and automations based on conversation events.',
     defaultEnabled: false,
-    tools: ['trigger_automation'],
+    // ⚠️ NO TOOLS. `trigger_automation` was a stub that reported "queued"
+    // without queuing anything, so the agent told customers a workflow had
+    // run when none had. It is withheld until it is wired to the real
+    // automation dispatcher; the skill stays listed so saved configs
+    // keep parsing.
+    tools: [],
     config: [
       {
         key: 'automation_types',
@@ -424,19 +429,9 @@ export const AGENT_SKILLS: SkillDefinition[] = [
         maxLength: 60,
       },
     ],
-    prompt: (config) => {
-      const types = skillList(config, 'automation_types');
-      let prompt =
-        'Automation triggers: when a customer event warrants an internal action, ';
-      if (types.length > 0) {
-        prompt += `call \`trigger_automation\` to run: ${types.join(', ')}. `;
-      } else {
-        prompt += 'call `trigger_automation` to run configured automations. ';
-      }
-      prompt +=
-        'Only trigger automations the customer explicitly requested or that directly serve their stated need — do not auto-trigger speculatively.';
-      return prompt;
-    },
+    prompt: () =>
+      'Automation triggers: you cannot start internal workflows yourself. ' +
+      'Never tell a customer an automation or workflow has been started; if something needs doing internally, offer to have the team follow up.',
   },
 ];
 

@@ -65,6 +65,45 @@ export function interpolate(
 }
 
 /**
+ * Interpolate a URL template so customer-supplied values cannot rewrite
+ * the request.
+ *
+ * Plain `interpolate` splices raw values: a contact named `x/../admin?y=`
+ * or a message containing `&role=admin` changes the path and query of the
+ * call. Here every token in the PATH / QUERY / FRAGMENT portion is
+ * percent-encoded (`encodeURIComponent`). The scheme and host (everything
+ * up to the first `/`, `?` or `#`) are left as authored so a base URL held
+ * in a variable still works — the host is policed by the SSRF guard, not
+ * by encoding. A token that already applies `| urlencode` is not encoded
+ * twice.
+ */
+export function interpolateUrl(
+  template: string,
+  context: AutomationContext | undefined,
+): string {
+  if (typeof template !== 'string' || template.indexOf('{{') === -1) {
+    return template ?? '';
+  }
+  const originMatch = template.match(
+    /^((?:[a-z][a-z0-9+.-]*:\/\/)?[^/?#]*)([\s\S]*)$/i,
+  );
+  const origin = originMatch?.[1] ?? '';
+  const rest = originMatch?.[2] ?? template;
+
+  const resolvedRest = rest.replace(TOKEN_RE, (_whole, expr: string) => {
+    const text = String(expr);
+    const value = evaluateExpression(text, context);
+    const alreadyEncoded = splitTopLevel(text, '|')
+      .slice(1)
+      .some((f) => f.trim().split(':')[0].trim() === 'urlencode');
+    const asText = stringifyForText(value);
+    return alreadyEncoded ? asText : encodeURIComponent(asText);
+  });
+
+  return interpolate(origin, context) + resolvedRest;
+}
+
+/**
  * Resolve a template that is EXACTLY one token (`"{{ steps.x.body }}"`)
  * to the underlying value with its type intact, and anything else by
  * ordinary string interpolation.
@@ -167,7 +206,10 @@ export function resolveToken(
   context: AutomationContext | undefined,
 ): unknown {
   const ctx = context ?? {};
-  const segments = path.split('.').map((p) => p.trim()).filter(Boolean);
+  const segments = path
+    .split('.')
+    .map((p) => p.trim())
+    .filter(Boolean);
   if (segments.length === 0) return '';
   const [ns, ...rest] = segments;
 

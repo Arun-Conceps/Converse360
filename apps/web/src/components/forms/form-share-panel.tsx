@@ -12,11 +12,25 @@ import {
   Workflow,
   TriangleAlert,
 } from 'lucide-react';
+import { QRCodeSVG } from '@/lib/vendor/qrcode-react';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { EditorCard, EditorScreen } from './form-editor-shell';
+
+/** Serialise the rendered QR and save it. Nothing leaves the browser. */
+function downloadQrSvg(slug: string) {
+  const svg = document.querySelector('#form-qr svg');
+  if (!svg) return;
+  const xml = new XMLSerializer().serializeToString(svg);
+  const url = URL.createObjectURL(new Blob([xml], { type: 'image/svg+xml' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${slug}-qr.svg`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 interface FormShareData {
   id: string;
@@ -159,27 +173,27 @@ export default function FormSharePanel({ form }: FormSharePanelProps) {
         >
           {isPublished ? (
             <>
-              {/* Rendered via a free QR API — no dependency needed */}
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(form.public_url)}`}
-                alt={`QR code linking to ${form.name}`}
+              <div
+                id="form-qr"
                 className="border-border rounded-lg border bg-white p-2"
-                width={180}
-                height={180}
-              />
-              <a
+              >
+                <QRCodeSVG
+                  value={form.public_url}
+                  size={180}
+                  level="M"
+                  title={`QR code linking to ${form.name}`}
+                />
+              </div>
+              <button
+                type="button"
                 id="btn-download-qr"
-                href={`https://api.qrserver.com/v1/create-qr-code/?size=400x400&format=png&data=${encodeURIComponent(form.public_url)}`}
-                download={`${form.slug}-qr.png`}
-                target="_blank"
-                rel="noopener noreferrer"
+                onClick={() => downloadQrSvg(form.slug)}
                 className={cn(
                   buttonVariants({ variant: 'outline', size: 'sm' })
                 )}
               >
-                Download PNG (400×400)
-              </a>
+                Download SVG
+              </button>
             </>
           ) : (
             <p className="border-border text-muted-foreground rounded-lg border border-dashed px-6 py-10 text-center text-sm">

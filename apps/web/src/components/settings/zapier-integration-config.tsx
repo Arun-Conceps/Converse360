@@ -20,6 +20,8 @@ import {
   ExternalLink,
   Webhook,
 } from 'lucide-react';
+import { useAuth } from '@/hooks/use-auth';
+import { friendlyApiError, ASK_ADMIN_MESSAGE } from '@/lib/auth/forbidden';
 import { WEBHOOK_EVENTS, WEBHOOK_EVENT_DESCRIPTIONS, type WebhookEvent } from '@/lib/webhooks/events';
 
 interface ZapierEndpoint {
@@ -33,6 +35,7 @@ interface ZapierEndpoint {
 }
 
 export function ZapierIntegrationConfig() {
+  const { canEditSettings, profileLoading } = useAuth();
   const [loading, setLoading] = useState(true);
   const [endpoints, setEndpoints] = useState<ZapierEndpoint[]>([]);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -50,7 +53,7 @@ export function ZapierIntegrationConfig() {
       setLoading(true);
       const res = await fetch('/api/integrations/zapier');
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to load connections');
+      if (!res.ok) throw new Error(friendlyApiError(res.status, data.error, 'Failed to load connections'));
       setEndpoints(data.endpoints || []);
     } catch (err: any) {
       toast.error(err.message || 'Failed to load Zapier connections');
@@ -60,8 +63,15 @@ export function ZapierIntegrationConfig() {
   };
 
   useEffect(() => {
+    // The whole Zapier API is admin-only; do not fire a request a viewer or
+    // agent is certain to have refused.
+    if (profileLoading) return;
+    if (!canEditSettings) {
+      setLoading(false);
+      return;
+    }
     loadEndpoints();
-  }, []);
+  }, [profileLoading, canEditSettings]);
 
   const toggleEvent = (event: WebhookEvent, checked: boolean) => {
     setFormEvents((prev) =>
@@ -87,7 +97,7 @@ export function ZapierIntegrationConfig() {
         body: JSON.stringify({ url: formUrl.trim(), events: formEvents }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to connect Zapier');
+      if (!res.ok) throw new Error(friendlyApiError(res.status, data.error, 'Failed to connect Zapier'));
 
       toast.success('Zapier webhook connected!');
       setNewSecret(data.endpoint?.secret || null);
@@ -111,7 +121,7 @@ export function ZapierIntegrationConfig() {
         body: JSON.stringify({ is_active: !endpoint.is_active }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to update connection');
+      if (!res.ok) throw new Error(friendlyApiError(res.status, data.error, 'Failed to update connection'));
 
       setEndpoints((prev) =>
         prev.map((e) => (e.id === endpoint.id ? { ...e, ...data.endpoint } : e))
@@ -131,7 +141,7 @@ export function ZapierIntegrationConfig() {
         method: 'POST',
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Test delivery failed');
+      if (!res.ok) throw new Error(friendlyApiError(res.status, data.error, 'Test delivery failed'));
       toast.success('Test event sent — check your Zap history in Zapier');
     } catch (err: any) {
       toast.error(err.message || 'Test delivery failed');
@@ -146,7 +156,7 @@ export function ZapierIntegrationConfig() {
     try {
       const res = await fetch(`/api/integrations/zapier/${endpoint.id}`, { method: 'DELETE' });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to disconnect');
+      if (!res.ok) throw new Error(friendlyApiError(res.status, data.error, 'Failed to disconnect'));
 
       setEndpoints((prev) => prev.filter((e) => e.id !== endpoint.id));
       toast.success('Zap disconnected');
@@ -166,6 +176,15 @@ export function ZapierIntegrationConfig() {
       toast.error('Copy failed — select and copy manually');
     }
   };
+
+  if (!profileLoading && !canEditSettings) {
+    return (
+      <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
+        {ASK_ADMIN_MESSAGE} Zapier connections can only be managed by workspace
+        admins.
+      </div>
+    );
+  }
 
   if (loading) {
     return (

@@ -61,17 +61,20 @@ export function TagManager() {
       setLoading(false);
       return;
     }
-    fetchTags(user.id);
+    // Wait for the active workspace: filtering on null would show an empty
+    // list that looks like an empty workspace.
+    if (!accountId) return;
+    fetchTags(accountId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, user?.id]);
+  }, [authLoading, user?.id, accountId]);
 
-  async function fetchTags(userId: string) {
+  async function fetchTags(workspaceId: string) {
     try {
       setLoading(true);
       const { data, error } = await supabase
         .from('tags')
         .select('*')
-        .eq('user_id', userId)
+        .eq('account_id', workspaceId)
         .order('created_at', { ascending: true });
 
       if (error) throw error;

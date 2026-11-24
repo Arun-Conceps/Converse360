@@ -5,6 +5,7 @@ import {
   Inject,
   forwardRef,
 } from '@nestjs/common';
+import { isUuid } from '../utils/uuid.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EntitlementService } from '../../subscription/services/entitlement.service';
 import {
@@ -295,6 +296,13 @@ export class MessageSendService {
 
     let contextMessageId: string | undefined;
     if (replyToMessageId) {
+      if (!isUuid(replyToMessageId)) {
+        throw new ApiError(
+          'bad_request',
+          "'reply_to_message_id' must be a valid UUID",
+          HttpStatus.BAD_REQUEST,
+        );
+      }
       const parent = await this.prisma.messages.findFirst({
         where: {
           id: replyToMessageId,

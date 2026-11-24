@@ -26,12 +26,31 @@ export class QrLoginController {
 
   @Post('start')
   start(@Req() req: Request) {
-    return this.qr.start(req.ip ?? 'unknown');
+    return this.qr.start(
+      req.ip ?? 'unknown',
+      req.headers['user-agent'] ?? '',
+    );
   }
 
   @Get('status')
   status(@Query('id') id: string, @Query('secret') secret: string) {
     return this.qr.poll(id, secret);
+  }
+
+  /** Same as GET, but the secret travels in the body, not in URLs/logs. */
+  @Post('status')
+  statusPost(@Body() body: { id?: string; secret?: string }) {
+    return this.qr.poll(body?.id ?? '', body?.secret ?? '');
+  }
+
+  /** Where was this QR started? Call before `approve` to show the user. */
+  @Post('peek')
+  @UseGuards(SupabaseUserGuard)
+  peek(
+    @CurrentUserId() userId: string,
+    @Body() body: { id?: string; secret?: string },
+  ) {
+    return this.qr.peek(userId, body?.id ?? '', body?.secret ?? '');
   }
 
   @Post('approve')

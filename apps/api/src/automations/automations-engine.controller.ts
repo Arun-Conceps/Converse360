@@ -1,4 +1,11 @@
-import { Body, Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  HttpCode,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { SupabaseAuthGuard } from '../auth/guards/supabase-auth.guard';
 import { RequireRole } from '../auth/decorators/require-role.decorator';
 import { CurrentAccount } from '../auth/decorators/current-account.decorator';
@@ -7,6 +14,16 @@ import { InternalDispatchGuard } from './guards/internal-dispatch.guard';
 import { AutomationDispatchService } from './services/automation-dispatch.service';
 import { TriggerAutomationDto } from './dto/trigger-automation.dto';
 import { InternalDispatchDto } from './dto/internal-dispatch.dto';
+
+/**
+ * Trigger types the manual endpoint may fire. Every other trigger is
+ * raised by a real event (an inbound message, a form submission, a tag)
+ * and letting a signed-in user forge one with arbitrary context would run
+ * any account automation on demand — including sends to any contact.
+ * Nothing in apps/web calls this route today; `time_based` is the one
+ * trigger with no inbound-event meaning, so it is the safe test hook.
+ */
+export const MANUAL_TRIGGER_TYPES: readonly string[] = ['time_based'];
 
 @Controller()
 export class AutomationsEngineController {
@@ -18,11 +35,16 @@ export class AutomationsEngineController {
    */
   @Post('automations/engine')
   @UseGuards(SupabaseAuthGuard)
-  @RequireRole('agent')
+  @RequireRole('admin')
   async trigger(
     @CurrentAccount() account: SupabaseAccountContext,
     @Body() body: TriggerAutomationDto,
   ) {
+    if (!MANUAL_TRIGGER_TYPES.includes(body.trigger_type)) {
+      throw new BadRequestException(
+        `Trigger "${body.trigger_type}" cannot be fired manually.`,
+      );
+    }
     await this.dispatch.dispatch({
       accountId: account.accountId,
       triggerType: body.trigger_type,

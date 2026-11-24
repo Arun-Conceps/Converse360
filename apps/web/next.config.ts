@@ -43,6 +43,11 @@ const SECURITY_HEADERS = [
       // Next.js needs 'unsafe-inline' for its inline hydration script
       // and 'unsafe-eval' in dev + some production optimisations.
       // Nonce-based CSP is a later project.
+      //
+      // KNOWN WEAKNESS: this policy is Report-Only (enforces nothing) and,
+      // even when enforced, 'unsafe-inline' + 'unsafe-eval' in script-src
+      // and `img-src https:` mean it would not stop an XSS or an image
+      // beacon. Enforcing needs a nonce/hash strategy first.
       "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
       // Tailwind + inline style attributes on lots of components.
       "style-src 'self' 'unsafe-inline'",
@@ -83,7 +88,9 @@ const nextConfig: NextConfig = {
    *     the correct production headers for hashed assets.
    *   - /api/*          — no-store. API responses are per-user and
    *     must never be shared across requests at the edge.
-   *   - Everything else — public, brief s-maxage + generous
+   *   - Dashboard / onboarding (everything not listed as public) —
+   *     `private, no-store`. Public marketing-ish pages (/f, /book,
+   *     /widget, auth screens, data-deletion pages) — public, brief s-maxage + generous
    *     stale-while-revalidate. The edge serves instantly from cache
    *     for the first 5 min, then returns cached content while
    *     refreshing in the background for up to 24 h. A deploy's
@@ -339,7 +346,34 @@ const nextConfig: NextConfig = {
         headers: [{ key: 'Cache-Control', value: 'no-store' }],
       },
       {
-        source: '/:path((?!_next/static|_next/image|api).*)',
+        // Everything that is NOT a public page: the authenticated
+        // dashboard and onboarding screens. These are per-user HTML, so a
+        // shared cache (CDN / reverse proxy) must never store them — a
+        // `public, s-maxage` here could serve one user's rendered page to
+        // another. The public surfaces below are excluded by the negative
+        // lookahead so the two rules never both match (Next merges
+        // same-key headers and "last wins" is not something to rely on).
+        source:
+          '/:path((?!_next/static|_next/image|api|f/|book/|widget/|login|signup|forgot-password|reset-password|ads-data-deletion|instagram-data-deletion).*)',
+        headers: [
+          { key: 'Cache-Control', value: 'private, no-store, max-age=0' },
+        ],
+      },
+      ...[
+        '/f/:path*',
+        '/book/:path*',
+        '/widget/:path*',
+        '/login',
+        '/signup',
+        '/forgot-password',
+        '/reset-password',
+        '/ads-data-deletion',
+        '/instagram-data-deletion',
+      ].map((source) => ({
+        // Public, anonymous, identical for every visitor: the only pages
+        // allowed a short shared-cache lifetime (see the chunk-hash
+        // drift note above).
+        source,
         headers: [
           {
             key: 'Cache-Control',
@@ -347,7 +381,7 @@ const nextConfig: NextConfig = {
               'public, max-age=0, s-maxage=300, stale-while-revalidate=86400',
           },
         ],
-      },
+      })),
       {
         // Security headers on every response, including /_next/static
         // assets (nosniff matters there) and /api/* (HSTS + referrer-

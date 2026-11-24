@@ -1043,9 +1043,8 @@ export interface EcommerceIntegration {
   account_id: string;
   platform: EcommercePlatform;
   store_url: string;
-  api_key?: string;
-  api_secret?: string;
-  access_token?: string;
+  // api_key / api_secret / access_token are deliberately absent: the list
+  // endpoint no longer returns credentials. Show "Connected" from `status`.
   status: EcommerceIntegrationStatus;
   last_sync_at?: string;
   sync_error?: string;

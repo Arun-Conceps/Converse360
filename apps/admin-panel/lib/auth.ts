@@ -7,6 +7,7 @@ import { cache } from 'react';
 
 import { adminPassword, adminUsername } from '@/lib/env';
 import { prisma } from '@/lib/prisma';
+import { breakGlassVersion } from '@/lib/session-version';
 import {
   BREAK_GLASS_SUBJECT,
   SESSION_COOKIE,
@@ -65,6 +66,20 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(left, right);
 }
 
+/**
+ * What a break-glass token must carry to still be honoured. Derived from the
+ * live credential (+ optional ADMIN_SESSION_VERSION), so rotating the env
+ * password or bumping that variable revokes every outstanding break-glass
+ * session on its next request.
+ */
+function currentBreakGlassVersion(): number {
+  return breakGlassVersion(
+    adminUsername().trim().toLowerCase(),
+    adminPassword(),
+    process.env.ADMIN_SESSION_VERSION?.trim() ?? ''
+  );
+}
+
 function breakGlassConfigured(): boolean {
   return Boolean(process.env.ADMIN_USERNAME && process.env.ADMIN_PASSWORD);
 }
@@ -121,7 +136,7 @@ export async function checkCredentials(
         ok: true,
         subject: BREAK_GLASS_SUBJECT,
         role: 'super_admin',
-        version: 0,
+        version: currentBreakGlassVersion(),
       };
     }
   }
@@ -173,6 +188,7 @@ export const getStaff = cache(async (): Promise<Staff | null> => {
 
   if (session.subject === BREAK_GLASS_SUBJECT) {
     if (!breakGlassConfigured()) return null;
+    if (session.version !== currentBreakGlassVersion()) return null;
     const username = adminUsername();
     return {
       id: null,

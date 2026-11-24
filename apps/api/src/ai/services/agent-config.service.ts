@@ -10,6 +10,12 @@ import { crawlPage } from '../lib/crawl';
 import { generateReply } from '../lib/generate';
 import { loadAiConfig } from '../lib/config';
 import { AiError } from '../lib/types';
+import { assertCanSpendCredits } from '../credits/credits.constants';
+import { AiCreditsService } from '../credits/ai-credits.service';
+import { RateLimitService } from '../../common/rate-limit/rate-limit.service';
+
+/** Drafting from a website is a paid model call plus an outbound fetch. */
+export const DRAFT_SITE_RATE = { limit: 5, windowMs: 60 * 60 * 1000 };
 
 /** Field length caps. Generous, but a prompt is not a filing cabinet. */
 const LIMITS = {
@@ -62,7 +68,11 @@ function text(
  */
 @Injectable()
 export class AgentConfigService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly credits: AiCreditsService,
+    private readonly rateLimit: RateLimitService,
+  ) {}
 
   /** The skill registry as the UI needs it: definitions, not prompts. */
   skillRegistry() {
@@ -582,6 +592,36 @@ export class AgentConfigService {
       );
     }
 
+    // Per-account throttle BEFORE the crawl and the model call: both cost
+    // us something (bandwidth, and credits on the platform key).
+    const limited = await this.rateLimit.check(
+      `ai-draft-site:${args.accountId}`,
+      DRAFT_SITE_RATE,
+    );
+    if (!limited.success) {
+      throw new HttpException(
+        {
+          error: 'Too many drafts. Wait a while before drafting again.',
+          code: 'rate_limited',
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    // Empty wallet and no key of their own: do not crawl for a call that
+    // cannot run.
+    try {
+      assertCanSpendCredits(config);
+    } catch (err) {
+      if (err instanceof AiError) {
+        throw new HttpException(
+          { error: err.message, code: err.code },
+          err.status ?? HttpStatus.PAYMENT_REQUIRED,
+        );
+      }
+      throw err;
+    }
+
     const normalized = /^https?:\/\//i.test(target)
       ? target
       : `https://${target}`;
@@ -614,7 +654,7 @@ export class AgentConfigService {
       'Output the description only.',
     ].join(' ');
 
-    const { text: draft } = await generateReply({
+    const { text: draft, usage } = await generateReply({
       config,
       systemPrompt,
       messages: [
@@ -624,6 +664,18 @@ export class AgentConfigService {
         },
       ],
     });
+
+    // Metered like every other generation on the platform key. Never
+    // throws; BYOK runs are billed by their own provider.
+    if (config.source === 'platform') {
+      await this.credits.chargeGeneration({
+        accountId: args.accountId,
+        feature: 'playground',
+        provider: config.provider,
+        model: config.model,
+        usage,
+      });
+    }
 
     return {
       url: page.url,

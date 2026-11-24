@@ -10,6 +10,7 @@ import {
   UseFilters,
   Res,
   HttpStatus,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { RequiresEntitlement } from '../../subscription/guards/entitlement.guard';
@@ -17,6 +18,7 @@ import { ApiKeyGuard } from '../../auth/guards/api-key.guard';
 import { RequireScope } from '../../auth/decorators/require-scope.decorator';
 import { CurrentAccount } from '../../auth/decorators/current-account.decorator';
 import type { AccountContext } from '../../auth/types/account-context.type';
+import { optionalUuid } from '../utils/uuid.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ApiExceptionFilter } from '../utils/api-exception.filter';
 import { ok, okList, ApiError } from '../utils/respond.util';
@@ -73,10 +75,11 @@ export class ContactsController {
       ];
     }
 
-    if (tagQuery) {
+    const tagId = optionalUuid(tagQuery, 'tag');
+    if (tagId) {
       whereClause.contact_tags = {
         some: {
-          tag_id: tagQuery,
+          tag_id: tagId,
         },
       };
     }
@@ -186,7 +189,7 @@ export class ContactsController {
   @RequireScope('contacts:read')
   async getContact(
     @CurrentAccount() ctx: AccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ) {
     const contact = await this.prisma.contacts.findFirst({
       where: {
@@ -217,7 +220,7 @@ export class ContactsController {
   @RequireScope('contacts:write')
   async updateContact(
     @CurrentAccount() ctx: AccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() body: any,
   ) {
     if (!body || typeof body !== 'object') {

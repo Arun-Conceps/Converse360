@@ -1,5 +1,6 @@
 'use client';
 
+import { safeHttpUrl } from '@/lib/safe-url';
 import { useEffect, useRef } from 'react';
 import { AlertCircle, Check, CheckCheck, Clock, FileText } from 'lucide-react';
 
@@ -151,7 +152,7 @@ function MessageBody({
             at unknown intrinsic sizes inside a 400px frame. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={media}
+          src={safeHttpUrl(media)}
           alt={text ?? 'Attachment'}
           className="max-h-64 rounded-lg object-cover"
         />
@@ -164,7 +165,7 @@ function MessageBody({
     const Tag = type === 'video' ? 'video' : 'audio';
     return (
       <div className="space-y-1">
-        <Tag src={media} controls className="max-w-full rounded-lg" />
+        <Tag src={safeHttpUrl(media)} controls className="max-w-full rounded-lg" />
         {text && <p className="whitespace-pre-wrap">{text}</p>}
       </div>
     );
@@ -175,7 +176,7 @@ function MessageBody({
       (message.metadata?.filename as string | undefined) ?? 'Attachment';
     return (
       <a
-        href={media}
+        href={safeHttpUrl(media)}
         target="_blank"
         rel="noopener noreferrer"
         className="flex items-center gap-2 underline-offset-2 hover:underline"

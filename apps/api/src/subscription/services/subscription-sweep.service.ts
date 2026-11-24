@@ -4,6 +4,9 @@ import type { Queue } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SUBSCRIPTION_SWEEP_QUEUE, envInt } from '../../queue/queue.constants';
 
+/** Razorpay order ids; subscription ids are `sub_`. */
+export const ONE_TIME_ORDER_PREFIX = 'order_';
+
 /**
  * ============================================================
  * The clock nobody was winding.
@@ -64,7 +67,11 @@ export class SubscriptionSweepService implements OnModuleInit {
     return envInt('SUBSCRIPTION_GRACE_DAYS', 3);
   }
 
-  async sweep(): Promise<{ expired: number; pastDue: number }> {
+  async sweep(): Promise<{
+    expired: number;
+    pastDue: number;
+    lapsedOneTime: number;
+  }> {
     const now = new Date();
 
     // Both writes are guarded by the status they expect, so a webhook
@@ -88,13 +95,35 @@ export class SubscriptionSweepService implements OnModuleInit {
       data: { status: 'past_due', updated_at: now },
     });
 
-    if (expired.count > 0 || pastDue.count > 0) {
+    // A ONE-TIME Razorpay payment stores its ORDER id in
+    // `razorpay_subscription_id` (see razorpay.controller confirm-payment —
+    // idempotency without a schema change). It is not a recurring mandate:
+    // no gateway will ever renew it, so exempting it from the sweep left
+    // one-time payers `active` for ever. Once the period they paid for has
+    // ended they lapse to `expired`; recurring `sub_` rows stay the
+    // gateway's. Stripe ids are never order ids, so those stay exempt.
+    const lapsedOneTime = await this.prisma.user_subscriptions.updateMany({
+      where: {
+        status: 'active',
+        current_period_end: { not: null, lt: now },
+        stripe_subscription_id: null,
+        razorpay_subscription_id: { startsWith: ONE_TIME_ORDER_PREFIX },
+      },
+      data: { status: 'expired', updated_at: now },
+    });
+
+    if (expired.count > 0 || pastDue.count > 0 || lapsedOneTime.count > 0) {
       this.logger.log(
         `subscription sweep: ${expired.count} trial(s) expired, ` +
-          `${pastDue.count} marked past due`,
+          `${pastDue.count} marked past due, ` +
+          `${lapsedOneTime.count} one-time payment(s) lapsed`,
       );
     }
 
-    return { expired: expired.count, pastDue: pastDue.count };
+    return {
+      expired: expired.count,
+      pastDue: pastDue.count,
+      lapsedOneTime: lapsedOneTime.count,
+    };
   }
 }

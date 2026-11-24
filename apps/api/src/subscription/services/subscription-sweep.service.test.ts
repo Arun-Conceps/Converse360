@@ -154,4 +154,29 @@ describe('SubscriptionSweepService', () => {
       expect(arg.data.status).not.toBe('cancelled');
     }
   });
+
+  it('expires a lapsed ONE-TIME razorpay payment (order_ id) at period end', async () => {
+    prisma.user_subscriptions.updateMany
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 4 });
+
+    const result = await service.sweep();
+
+    expect(result.lapsedOneTime).toBe(4);
+    expect(whereOf(prisma.user_subscriptions.updateMany, 2)).toMatchObject({
+      status: 'active',
+      stripe_subscription_id: null,
+      razorpay_subscription_id: { startsWith: 'order_' },
+    });
+    expect(dataOf(prisma.user_subscriptions.updateMany, 2).status).toBe(
+      'expired',
+    );
+  });
+
+  it('never touches recurring sub_ rows in the one-time pass', async () => {
+    await service.sweep();
+    const where = whereOf(prisma.user_subscriptions.updateMany, 2);
+    expect(where.razorpay_subscription_id).toEqual({ startsWith: 'order_' });
+  });
 });

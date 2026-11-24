@@ -7,6 +7,7 @@ import Redis from 'ioredis';
 import type { RequestHandler } from 'express';
 import { ALL_QUEUE_NAMES } from '../queue.constants';
 import {
+  AuthThrottle,
   checkBasicAuth,
   readDashboardCredentials,
   type DashboardCredentials,
@@ -45,6 +46,7 @@ export class QueueDashboardService implements OnModuleDestroy {
   private connection: Redis | null = null;
   private queues: Queue[] = [];
   private router: RequestHandler | null = null;
+  private readonly throttle = new AuthThrottle();
 
   constructor() {
     this.credentials = readDashboardCredentials();
@@ -66,13 +68,22 @@ export class QueueDashboardService implements OnModuleDestroy {
    */
   authMiddleware(): RequestHandler {
     return (req, res, next) => {
+      const ip = req.ip ?? 'unknown';
+      if (this.throttle.isBlocked(ip)) {
+        res.status(429).set('Retry-After', '600').send('Too many attempts');
+        return;
+      }
       if (
         this.credentials &&
         checkBasicAuth(req.headers.authorization, this.credentials)
       ) {
+        this.throttle.reset(ip);
         next();
         return;
       }
+      // A request with no Authorization header is the browser's initial
+      // challenge, not a guess — only count actual credentials.
+      if (req.headers.authorization) this.throttle.recordFailure(ip);
       res
         .status(401)
         .set(

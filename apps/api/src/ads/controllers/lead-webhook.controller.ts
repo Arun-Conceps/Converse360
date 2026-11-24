@@ -30,6 +30,13 @@ import { LEAD_FETCH_QUEUE } from '../../queue/queue.constants';
  *   happens anyway: with the feature off there is no connected Page for
  *   the lookup to find. Same reasoning as AdsPrivacyController.
  */
+function safeEqual(a: string | undefined, b: string): boolean {
+  if (typeof a !== 'string') return false;
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+}
+
 @Controller('webhooks/facebook-leads')
 export class LeadWebhookController {
   private readonly logger = new Logger(LeadWebhookController.name);
@@ -48,10 +55,18 @@ export class LeadWebhookController {
     @Query('hub.challenge') challenge: string,
     @Res() res: express.Response,
   ) {
-    const expected =
-      process.env.FACEBOOK_WEBHOOK_VERIFY_TOKEN ?? 'wacrm-fb-leads-verify';
+    // FAIL CLOSED: no built-in default. A well-known fallback token lets
+    // anyone complete the subscription handshake against an unconfigured
+    // deployment.
+    const expected = process.env.FACEBOOK_WEBHOOK_VERIFY_TOKEN;
+    if (!expected) {
+      this.logger.error(
+        'FACEBOOK_WEBHOOK_VERIFY_TOKEN is not configured - refusing verification',
+      );
+      return res.status(503).send('Webhook verification is not configured');
+    }
 
-    if (mode === 'subscribe' && verifyToken === expected) {
+    if (mode === 'subscribe' && safeEqual(verifyToken, expected)) {
       this.logger.log('Meta lead webhook verified');
       return res.status(200).send(challenge);
     }
@@ -70,24 +85,34 @@ export class LeadWebhookController {
   ) {
     // Verify X-Hub-Signature-256 (HMAC-SHA256 of raw body with app secret)
     const signature = req.headers['x-hub-signature-256'] as string | undefined;
-    const appSecret = process.env.META_APP_SECRET ?? '';
+    const secrets = [
+      process.env.META_APP_SECRET,
+      process.env.META_ADS_APP_SECRET,
+    ].filter((v): v is string => !!v);
 
-    if (appSecret && signature) {
-      const rawBody = req.rawBody ?? Buffer.from('');
-      const expected = `sha256=${createHmac('sha256', appSecret).update(rawBody).digest('hex')}`;
-      const sigBuf = Buffer.from(signature);
-      const expBuf = Buffer.from(expected);
-      const valid =
-        sigBuf.length === expBuf.length && timingSafeEqual(sigBuf, expBuf);
-
-      if (!valid) {
-        this.logger.warn('Meta lead webhook: invalid HMAC signature');
-        return res.status(403).json({ error: 'Invalid signature' });
-      }
-    } else if (appSecret) {
-      // App secret configured but no signature sent — reject
+    // FAIL CLOSED: with no secret configured the payload cannot be
+    // authenticated, and an unauthenticated lead is a forged lead.
+    if (secrets.length === 0) {
+      this.logger.error(
+        'Meta lead webhook: META_APP_SECRET is not configured - rejecting',
+      );
+      return res.status(503).json({ error: 'Webhook is not configured' });
+    }
+    if (!signature) {
       this.logger.warn('Meta lead webhook: missing X-Hub-Signature-256');
       return res.status(403).json({ error: 'Missing signature' });
+    }
+
+    const rawBody = req.rawBody ?? Buffer.from('');
+    const valid = secrets.some((secret) =>
+      safeEqual(
+        signature,
+        `sha256=${createHmac('sha256', secret).update(rawBody).digest('hex')}`,
+      ),
+    );
+    if (!valid) {
+      this.logger.warn('Meta lead webhook: invalid HMAC signature');
+      return res.status(403).json({ error: 'Invalid signature' });
     }
 
     const body = req.body as {

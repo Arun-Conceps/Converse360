@@ -72,16 +72,34 @@ export async function verifySupabaseSession(
   return verifyAccessToken(session.access_token);
 }
 
+/** Throws a plain Error (not a 401) when no verification key is configured. */
+export function assertVerifierConfigured(): void {
+  const alg = process.env.SUPABASE_JWT_ALG ?? 'HS256';
+  if (alg === 'ES256') {
+    if (!process.env.SUPABASE_URL) {
+      throw new Error('SUPABASE_URL is required for ES256 JWT verification');
+    }
+  } else if (!process.env.SUPABASE_JWT_SECRET) {
+    throw new Error('SUPABASE_JWT_SECRET is required for HS256 JWT verification');
+  }
+}
+
 /** Returns the verified `sub` claim, or throws UnauthorizedException. */
 export async function verifyAccessToken(token: string): Promise<string> {
+  // Misconfiguration is a 500 at the first request, not a silent
+  // "verify against the key `undefined`".
+  assertVerifierConfigured();
   try {
     const alg = process.env.SUPABASE_JWT_ALG ?? 'HS256';
+    // Supabase user access tokens always carry aud = 'authenticated'.
+    const opts = { audience: 'authenticated' };
     const { payload } =
       alg === 'ES256'
-        ? await jwtVerify(token, getJwks())
+        ? await jwtVerify(token, getJwks(), opts)
         : await jwtVerify(
             token,
             new TextEncoder().encode(process.env.SUPABASE_JWT_SECRET),
+            opts,
           );
 
     if (typeof payload.sub !== 'string') {

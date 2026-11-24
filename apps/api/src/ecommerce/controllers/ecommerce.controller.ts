@@ -26,7 +26,10 @@ import {
   normalizeStoreUrl,
   isShopifyShopDomain,
 } from '../utils/store-url.util';
-import { decodeShopifyState } from '../utils/shopify-oauth-state.util';
+import {
+  decodeShopifyState,
+  encodeShopifyState,
+} from '../utils/shopify-oauth-state.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
@@ -131,6 +134,75 @@ export class EcommerceController {
       }
       throw err;
     }
+  }
+
+  /**
+   * POST /api/ecommerce/shopify/auth-url — mint the Shopify authorize URL.
+   *
+   * The callback only accepts the signed state `encodeShopifyState` makes,
+   * and this is the one place that makes it. Admin-only; the integration
+   * must belong to the caller's account (Prisma bypasses RLS, so the
+   * account filter is the only check) and `shop` must be a real
+   * `*.myshopify.com` host, since the browser is sent there.
+   */
+  @Post('shopify/auth-url')
+  @RequireRole('admin')
+  async shopifyAuthUrl(
+    @CurrentAccount() account: SupabaseAccountContext,
+    @Body() body: { integrationId?: unknown; shop?: unknown },
+    @Res() res: Response,
+  ) {
+    const { integrationId, shop } = body ?? {};
+    if (typeof integrationId !== 'string' || !integrationId) {
+      return res
+        .status(HttpStatus.BAD_REQUEST)
+        .json({ error: 'integrationId is required' });
+    }
+    const storeUrl = normalizeStoreUrl('shopify', shop);
+    if (!storeUrl) {
+      return res.status(HttpStatus.BAD_REQUEST).json({
+        error: 'shop must be an <shop>.myshopify.com address',
+      });
+    }
+    const shopHost = new URL(storeUrl).hostname;
+
+    const clientId = process.env.SHOPIFY_CLIENT_ID;
+    const redirectUri = process.env.SHOPIFY_REDIRECT_URI;
+    if (!clientId || !process.env.SHOPIFY_CLIENT_SECRET || !redirectUri) {
+      return res.status(HttpStatus.SERVICE_UNAVAILABLE).json({
+        error:
+          'Shopify is not configured (SHOPIFY_CLIENT_ID, SHOPIFY_CLIENT_SECRET, SHOPIFY_REDIRECT_URI)',
+      });
+    }
+
+    const integration = await this.prisma.ecommerce_integrations.findFirst({
+      where: {
+        id: integrationId,
+        account_id: account.accountId,
+        platform: 'shopify',
+      },
+      select: { id: true },
+    });
+    if (!integration) {
+      return res
+        .status(HttpStatus.NOT_FOUND)
+        .json({ error: 'Integration not found' });
+    }
+
+    const search = new URLSearchParams({
+      client_id: clientId,
+      scope: process.env.SHOPIFY_SCOPES || 'read_products,read_orders',
+      redirect_uri: redirectUri,
+      state: encodeShopifyState({
+        accountId: account.accountId,
+        userId: account.userId,
+        integrationId: integration.id,
+      }),
+    });
+
+    return res.status(HttpStatus.OK).json({
+      url: `https://${shopHost}/admin/oauth/authorize?${search.toString()}`,
+    });
   }
 
   /**

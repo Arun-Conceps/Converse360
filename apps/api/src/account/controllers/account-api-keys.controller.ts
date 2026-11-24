@@ -20,6 +20,8 @@ import { generateApiKey, normalizeScopes } from '../utils/api-keys.util';
 
 const MAX_NAME_LEN = 80;
 const MAX_EXPIRY_DAYS = 365;
+export const DEFAULT_EXPIRY_DAYS = 365;
+export const MAX_ACTIVE_KEYS = 25;
 
 const SAFE_SELECT = {
   id: true,
@@ -89,15 +91,27 @@ export class AccountApiKeysController {
       });
     }
 
-    let expiresAt: Date | null = null;
+    // Never mint a key that lives forever: omitted/invalid -> the default.
     const rawExpiry = body?.expiresInDays;
-    if (
+    const days =
       typeof rawExpiry === 'number' &&
       Number.isFinite(rawExpiry) &&
       rawExpiry > 0
-    ) {
-      const days = Math.min(Math.floor(rawExpiry), MAX_EXPIRY_DAYS);
-      expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+        ? Math.min(Math.floor(rawExpiry), MAX_EXPIRY_DAYS)
+        : DEFAULT_EXPIRY_DAYS;
+    const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+
+    const active = await this.prisma.apiKey.count({
+      where: {
+        accountId: account.accountId,
+        revokedAt: null,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+      },
+    });
+    if (active >= MAX_ACTIVE_KEYS) {
+      return res.status(HttpStatus.CONFLICT).json({
+        error: `Limit of ${MAX_ACTIVE_KEYS} active API keys reached. Revoke one first.`,
+      });
     }
 
     const { plaintext, hash, prefix } = generateApiKey();

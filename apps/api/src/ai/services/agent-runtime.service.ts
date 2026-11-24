@@ -13,6 +13,7 @@ import {
 } from '../lib/tools/actions';
 import {
   BUILTIN_TOOLS,
+  MUTATING_BUILTIN_TOOLS,
   builtinToolsByName,
   type BuiltinToolContext,
 } from '../lib/tools/builtin';
@@ -66,6 +67,12 @@ export interface AssembledRun {
  *   panel".
  * ============================================================
  */
+/** GET and HEAD only: the methods that, by contract, change nothing. */
+export function isReadOnlyMethod(method: string): boolean {
+  const m = (method ?? '').toUpperCase();
+  return m === 'GET' || m === 'HEAD';
+}
+
 @Injectable()
 export class AgentRuntimeService {
   private readonly logger = new Logger(AgentRuntimeService.name);
@@ -184,8 +191,14 @@ export class AgentRuntimeService {
         : GOOGLE_TOOL_NAMES,
     );
 
+    // Draft mode withholds EVERY tool that writes, not just Google's:
+    // a human has not yet decided to send anything, and each press of
+    // "draft a reply" would otherwise create a deal or rewrite a contact.
+    const draftMode = ctx.mode === 'draft';
     const builtinNames = enabledSkillTools(config.skills).filter(
-      (name) => !withheldGoogle.has(name),
+      (name) =>
+        !withheldGoogle.has(name) &&
+        !(draftMode && MUTATING_BUILTIN_TOOLS.includes(name)),
     );
     const builtins = builtinToolsByName(builtinNames);
 
@@ -211,6 +224,9 @@ export class AgentRuntimeService {
       // one the skill prompt tells the model about, and silently
       // rerouting it to an arbitrary URL would be a confused-deputy bug.
       if (BUILTIN_TOOLS[action.name]) continue;
+      // Custom HTTP actions that are not safe/idempotent reads
+      // (POST/PUT/PATCH/DELETE) change the outside world: withheld in draft.
+      if (draftMode && !isReadOnlyMethod(action.method)) continue;
       actionByName.set(action.name, action);
     }
 

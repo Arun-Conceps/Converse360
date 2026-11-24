@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { RateLimitService } from '../../common/rate-limit/rate-limit.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { hashInviteToken } from '../utils/invitations.util';
 import {
@@ -17,13 +18,12 @@ import {
   SupabaseUserGuard,
 } from '../../auth/guards/supabase-user.guard';
 
+/** req.ip honours Express's `trust proxy`; raw X-Forwarded-For is client-controlled. */
 function getClientIp(req: Request): string {
-  const xff = req.headers['x-forwarded-for'];
-  if (xff) return (Array.isArray(xff) ? xff[0] : xff).split(',')[0].trim();
-  const xri = req.headers['x-real-ip'];
-  if (xri) return Array.isArray(xri) ? xri[0] : xri;
-  return 'unknown';
+  return req.ip ?? 'unknown';
 }
+
+const INVITE_RATE = { limit: 30, windowMs: 60_000 };
 
 /** Map Postgres SQLSTATE codes to HTTP status codes. */
 function rpcStatusCode(code: string): number {
@@ -41,7 +41,24 @@ function rpcStatusCode(code: string): number {
 export class InvitationsPublicController {
   private readonly logger = new Logger(InvitationsPublicController.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly rateLimit: RateLimitService,
+  ) {}
+
+  private async throttled(req: Request, res: Response): Promise<boolean> {
+    const r = await this.rateLimit.check(
+      `invite:${getClientIp(req)}`,
+      INVITE_RATE,
+    );
+    if (r.success) return false;
+    const retry = Math.max(1, Math.ceil((r.reset - Date.now()) / 1000));
+    res
+      .status(HttpStatus.TOO_MANY_REQUESTS)
+      .set('Retry-After', String(retry))
+      .json({ error: 'Too many requests' });
+    return true;
+  }
 
   /**
    * GET /api/invitations/:token/peek
@@ -60,8 +77,7 @@ export class InvitationsPublicController {
         .json({ ok: false, reason: 'not_found' });
     }
 
-    const ip = getClientIp(req);
-    this.logger.debug(`[peek] token from IP ${ip}`);
+    if (await this.throttled(req, res)) return;
 
     try {
       const result = await this.prisma.$queryRawUnsafe<
@@ -112,8 +128,10 @@ export class InvitationsPublicController {
   async redeem(
     @Param('token') token: string,
     @CurrentUserId() userId: string,
+    @Req() req: Request,
     @Res() res: Response,
   ) {
+    if (await this.throttled(req, res)) return;
     if (!token || typeof token !== 'string') {
       return res
         .status(HttpStatus.BAD_REQUEST)

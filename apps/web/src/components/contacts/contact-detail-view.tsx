@@ -280,10 +280,10 @@ export function ContactDetailView({
   }, [contactId, supabase]);
 
   const fetchTags = useCallback(async () => {
-    if (!contactId) return;
+    if (!contactId || !accountId) return;
 
     const [tagsRes, contactTagsRes] = await Promise.all([
-      supabase.from('tags').select('*').order('name'),
+      supabase.from('tags').select('*').eq('account_id', accountId).order('name'),
       supabase.from('contact_tags').select('tag_id').eq('contact_id', contactId),
     ]);
 
@@ -291,7 +291,7 @@ export function ContactDetailView({
     if (contactTagsRes.data) {
       setContactTagIds(contactTagsRes.data.map((ct) => ct.tag_id));
     }
-  }, [contactId, supabase]);
+  }, [contactId, supabase, accountId]);
 
   const fetchSegments = useCallback(async () => {
     if (!contactId || !accountId) return;
@@ -341,11 +341,15 @@ export function ContactDetailView({
   }, [contactId, supabase]);
 
   const fetchCustomFields = useCallback(async () => {
-    if (!contactId) return;
+    if (!contactId || !accountId) return;
     setLoadingCustom(true);
 
     const [fieldsRes, valuesRes] = await Promise.all([
-      supabase.from('custom_fields').select('*').order('field_name'),
+      supabase
+        .from('custom_fields')
+        .select('*')
+        .eq('account_id', accountId)
+        .order('field_name'),
       supabase
         .from('contact_custom_values')
         .select('*')
@@ -361,7 +365,7 @@ export function ContactDetailView({
       setCustomValues(map);
     }
     setLoadingCustom(false);
-  }, [contactId, supabase]);
+  }, [contactId, supabase, accountId]);
 
   const fetchDeals = useCallback(async () => {
     if (!contactId) return;

@@ -8,6 +8,7 @@ import {
   UseFilters,
   Res,
   HttpStatus,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { RequiresEntitlement } from '../../subscription/guards/entitlement.guard';
@@ -87,7 +88,7 @@ export class BroadcastsController {
   @RequireScope('broadcasts:send')
   async getBroadcast(
     @CurrentAccount() ctx: AccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ) {
     const broadcast = await this.prisma.broadcasts.findFirst({
       where: {

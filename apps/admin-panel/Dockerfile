@@ -24,9 +24,12 @@ RUN npm ci
 COPY packages/database ./packages/database
 RUN npm run generate --workspace=@repo/database
 
-# The env file has to be present for the build: `next build` reads .env.local,
-# and the panel's pages are all dynamic, so a missing DATABASE_URL surfaces at
-# request time rather than build time — but ADMIN_* are needed either way.
+# Runtime configuration comes from docker-compose `env_file`; the panel has no
+# NEXT_PUBLIC_ values to bake and every page is dynamic, so the build does not
+# need secrets. The repo-root .dockerignore excludes apps/admin-panel/.env* so
+# they never land in an image layer; this wildcard then matches nothing (or only
+# .env.local.example), which BuildKit accepts. If a build ever needs a value,
+# pass it as a build arg rather than un-ignoring the env file.
 COPY apps/admin-panel/.env.local* ./apps/admin-panel/
 
 # Copy the rest of the workspace files

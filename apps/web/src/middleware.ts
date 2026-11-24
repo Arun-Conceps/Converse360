@@ -36,6 +36,44 @@ const PUBLIC_PREFIXES = [
   '/auth/callback',
 ] as const
 
+/**
+ * Pages an anonymous visitor may load. Everything else redirects to /login.
+ * Derived from the route groups under src/app: (auth), join, auth/*,
+ * the two Meta data-deletion pages, and the root signpost. `/f/`, `/book/`
+ * and `/widget/` are handled earlier by PUBLIC_PREFIXES.
+ */
+const PUBLIC_EXACT = new Set([
+  '/',
+  '/login',
+  '/signup',
+  '/forgot-password',
+  '/reset-password',
+  '/ads-data-deletion',
+  '/instagram-data-deletion',
+])
+const PUBLIC_PAGE_PREFIXES = [
+  '/auth/',
+  // Invite landing: handles its own signed-out state (sends to signup/login
+  // with the token preserved).
+  '/join/',
+  // Static files served from apps/web/public that the matcher does not
+  // already exclude by extension.
+  '/audio/',
+  '/brand/',
+  '/icons/',
+  '/ecom-logo/',
+  '/opus/',
+  '/sounds/',
+  '/whatsapp-steps/',
+] as const
+
+export function isPublicPagePath(pathname: string): boolean {
+  return (
+    PUBLIC_EXACT.has(pathname) ||
+    PUBLIC_PAGE_PREFIXES.some((p) => pathname.startsWith(p))
+  )
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
   if (PUBLIC_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
@@ -111,38 +149,18 @@ export async function middleware(request: NextRequest) {
     return withRefreshedCookies(NextResponse.redirect(url))
   }
 
-  // Protected pages - redirect to login if not authenticated
+  // Protected pages - redirect to login if not authenticated.
+  //
+  // DENY BY DEFAULT: a page is protected unless it is on the explicit public
+  // allowlist (`isPublicPagePath`). The previous opt-in `protectedPaths` list
+  // silently left `/ads`, `/media` and `/pricing` open to anonymous requests
+  // (their data is still behind RLS/API auth, but the shell and its
+  // server-rendered bits were reachable). A NEW dashboard route is now
+  // protected the day it is created, with nothing to remember.
   // NOTE: next.config.ts `redirects()` runs BEFORE this, so the legacy
-  // flat paths (/broadcasts, /templates, …) never reach here — their
-  // channel-scoped destinations under /channels do, hence the entry below.
-  const protectedPaths = [
-    '/dashboard',
-    // The post-sign-in workspace picker. Protected, not public: it lists the
-    // workspaces this person belongs to.
-    '/select-workspace',
-    // The guided-signup wizard. Protected, not public: it configures a
-    // workspace, so there has to be a session behind it.
-    '/welcome',
-    // The locked "your trial has ended" screen. Same reasoning: it names
-    // the workspace, its plan and its owner, and it opens a checkout.
-    '/billing',
-    '/onboarding',
-    '/inbox',
-    '/contacts',
-    '/pipelines',
-    '/channels',
-    '/automations',
-    '/flows',
-    '/forms',
-    '/appointments',
-    '/agents',
-
-    '/notifications',
-    '/members',
-    '/integrations',
-    '/settings',
-  ]
-  if (!user && protectedPaths.some(path => request.nextUrl.pathname.startsWith(path))) {
+  // flat paths (/broadcasts, /templates, …) never reach here.
+  // `/api/*` is excluded: it is proxied to apps/api, which authenticates it.
+  if (!user && !pathname.startsWith('/api/') && !isPublicPagePath(pathname)) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     return withRefreshedCookies(NextResponse.redirect(url))

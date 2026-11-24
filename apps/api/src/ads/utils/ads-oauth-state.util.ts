@@ -1,6 +1,7 @@
 import {
   decodeSignedState,
   encodeSignedState,
+  encodeSignedStateWithNonce,
   type OAuthStatePayload,
 } from '../../common/security/oauth-state.util';
 import { adsAppCredentials } from '../ads.config';
@@ -19,6 +20,16 @@ import { adsAppCredentials } from '../ads.config';
 
 export function encodeAdsOAuthState(payload: OAuthStatePayload): string {
   return encodeSignedState({
+    payload,
+    secret: adsAppCredentials().appSecret,
+  });
+}
+
+export function encodeAdsOAuthStateWithNonce(payload: OAuthStatePayload): {
+  state: string;
+  nonce: string;
+} {
+  return encodeSignedStateWithNonce({
     payload,
     secret: adsAppCredentials().appSecret,
   });

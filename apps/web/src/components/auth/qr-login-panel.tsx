@@ -73,10 +73,14 @@ export function QrLoginPanel({ destination, onError }: Props) {
           return;
         }
         try {
-          const res = await fetch(
-            `/api/public/qr-login/status?id=${id}&secret=${secret}`,
-            { cache: "no-store" },
-          );
+          // POST with a JSON body: the secret must not travel in a URL
+          // (access logs, proxies, Referer). The rewrite is method-agnostic.
+          const res = await fetch("/api/public/qr-login/status", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id, secret }),
+            cache: "no-store",
+          });
           if (res.ok) {
             const body = await res.json();
             if (body.status === "approved") {

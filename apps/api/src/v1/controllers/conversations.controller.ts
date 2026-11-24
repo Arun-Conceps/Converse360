@@ -6,11 +6,13 @@ import {
   UseGuards,
   UseFilters,
   HttpStatus,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiKeyGuard } from '../../auth/guards/api-key.guard';
 import { RequireScope } from '../../auth/decorators/require-scope.decorator';
 import { CurrentAccount } from '../../auth/decorators/current-account.decorator';
 import type { AccountContext } from '../../auth/types/account-context.type';
+import { optionalUuid } from '../utils/uuid.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ApiExceptionFilter } from '../utils/api-exception.filter';
 import { ok, okList, ApiError } from '../utils/respond.util';
@@ -54,8 +56,9 @@ export class ConversationsController {
     if (status) {
       whereClause.status = status;
     }
-    if (contactId) {
-      whereClause.contact_id = contactId;
+    const contactUuid = optionalUuid(contactId, 'contact_id');
+    if (contactUuid) {
+      whereClause.contact_id = contactUuid;
     }
     // Optional, and deliberately unset by default: existing integrators
     // expect this endpoint to return everything, and silently hiding
@@ -105,7 +108,7 @@ export class ConversationsController {
   @RequireScope('conversations:read')
   async getConversation(
     @CurrentAccount() ctx: AccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ) {
     const conv = await this.prisma.conversations.findFirst({
       where: {
@@ -140,7 +143,7 @@ export class ConversationsController {
   @RequireScope('messages:read')
   async getConversationMessages(
     @CurrentAccount() ctx: AccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Query('limit') limitQuery?: string,
     @Query('cursor') cursorQuery?: string,
   ) {

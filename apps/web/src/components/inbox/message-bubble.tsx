@@ -1,5 +1,6 @@
 "use client";
 
+import { safeHttpUrl } from "@/lib/safe-url";
 import { useState, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import type {
@@ -128,7 +129,7 @@ function MediaImage({
         setLoading(false);
       }
     } else {
-      setSrc(url);
+      setSrc(safeHttpUrl(url) ?? null);
       setLoading(false);
     }
   }, [url]);
@@ -207,7 +208,7 @@ function TemplateHeader({
   if (header.type === "VIDEO") {
     return (
       <video
-        src={header.media_url}
+        src={safeHttpUrl(header.media_url)}
         controls
         className="max-h-64 max-w-60 rounded-lg"
       />
@@ -216,7 +217,7 @@ function TemplateHeader({
 
   return (
     <a
-      href={header.media_url}
+      href={safeHttpUrl(header.media_url)}
       target="_blank"
       rel="noopener noreferrer"
       className={cn(
@@ -281,7 +282,7 @@ function TemplateButtons({
           return (
             <a
               key={i}
-              href={button.url}
+              href={safeHttpUrl(button.url)}
               target="_blank"
               rel="noopener noreferrer"
               className={cn(className, "hover:underline")}
@@ -340,7 +341,7 @@ function MessageContent({
         <div>
           {message.media_url ? (
             <video
-              src={message.media_url}
+              src={safeHttpUrl(message.media_url)}
               controls
               className="max-h-64 max-w-60 rounded-lg"
             />
@@ -421,7 +422,7 @@ function MessageContent({
       // A share with no permalink still renders — just not as a link.
       return permalink ? (
         <a
-          href={permalink}
+          href={safeHttpUrl(permalink)}
           target="_blank"
           rel="noopener noreferrer"
           className={shell}
@@ -437,7 +438,7 @@ function MessageContent({
       return (
         <div>
           {message.media_url ? (
-            <audio src={message.media_url} controls className="max-w-60" />
+            <audio src={safeHttpUrl(message.media_url)} controls className="max-w-60" />
           ) : (
             <MediaUnavailable label="Audio" />
           )}
@@ -450,7 +451,7 @@ function MessageContent({
       }
       return (
         <a
-          href={message.media_url}
+          href={safeHttpUrl(message.media_url)}
           target="_blank"
           rel="noopener noreferrer"
           className="flex items-center gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm hover:bg-muted"
@@ -558,7 +559,7 @@ function MessageContent({
       if (!mapsUrl) return body;
       return (
         <a
-          href={mapsUrl}
+          href={safeHttpUrl(mapsUrl)}
           target="_blank"
           rel="noopener noreferrer"
           className="underline-offset-2 hover:underline"

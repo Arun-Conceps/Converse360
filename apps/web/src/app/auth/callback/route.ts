@@ -1,3 +1,4 @@
+import { resolveRedirectBase } from '@/lib/auth/redirect-base'
 import { NextResponse } from 'next/server'
 import type { EmailOtpType } from '@supabase/supabase-js'
 
@@ -61,22 +62,20 @@ function errorPath(reason: string): string {
 
 /**
  * Build the redirect against the host the *user* is on, not the one the
- * app happens to be bound to.
- *
- * In production this app sits behind a proxy on 127.0.0.1 (see
- * docker-compose.yml), so `origin` is the loopback address. Redirecting
- * there would send the browser to a host it cannot reach. `x-forwarded-host`
- * is the public one; it is only trusted here because the proxy is ours
- * and is the sole path to this port.
+ * app happens to be bound to (loopback behind our proxy in production).
+ * `x-forwarded-host` is attacker-controllable, so it is only honoured when
+ * allowlisted — see `resolveRedirectBase`. Set NEXT_PUBLIC_SITE_URL (or
+ * APP_URL) in production so the canonical origin is used.
  */
 function redirectTo(request: Request, origin: string, path: string) {
-  const forwardedHost = request.headers.get('x-forwarded-host')
-  const isLocal = process.env.NODE_ENV === 'development'
-
-  if (!isLocal && forwardedHost) {
-    const proto = request.headers.get('x-forwarded-proto') ?? 'https'
-    return NextResponse.redirect(`${proto}://${forwardedHost}${path}`)
-  }
-
-  return NextResponse.redirect(`${origin}${path}`)
+  const base = resolveRedirectBase({
+    requestOrigin: origin,
+    forwardedHost: request.headers.get('x-forwarded-host'),
+    forwardedProto: request.headers.get('x-forwarded-proto'),
+    siteUrl: process.env.NEXT_PUBLIC_SITE_URL,
+    appUrl: process.env.APP_URL,
+    allowedHosts: process.env.AUTH_ALLOWED_HOSTS,
+    isDevelopment: process.env.NODE_ENV === 'development',
+  })
+  return NextResponse.redirect(`${base}${path}`)
 }

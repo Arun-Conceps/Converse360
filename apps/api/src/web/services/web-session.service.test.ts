@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { WebSessionService } from './web-session.service';
@@ -132,6 +133,9 @@ function makeService(prisma: unknown) {
   return new WebSessionService(prisma as never, config as never);
 }
 
+const SECRET = 'a-test-secret-long-enough-for-hmac';
+
+/** Starts a session whose identity the customer's server vouched for. */
 function start(
   service: WebSessionService,
   profile: { name?: string; email?: string; phone?: string },
@@ -140,7 +144,24 @@ function start(
     accountId: ACCOUNT,
     ownerUserId: OWNER,
     profile,
-  });
+    identity: {
+      external_id: 'user-42',
+      hmac: createHmac('sha256', SECRET).update('user-42').digest('hex'),
+    },
+  } as never);
+}
+
+function startAnonymous(
+  service: WebSessionService,
+  profile: { name?: string; email?: string; phone?: string },
+  identity?: unknown,
+) {
+  return service.startOrResume({
+    accountId: ACCOUNT,
+    ownerUserId: OWNER,
+    profile,
+    ...(identity ? { identity } : {}),
+  } as never);
 }
 
 describe('WebSessionService — a phone that already has a contact', () => {
@@ -365,5 +386,44 @@ describe('WebSessionService — a phone nobody has yet', () => {
     await expect(start(makeService(prisma), { name: 'Priya' })).rejects.toThrow(
       /required/i,
     );
+  });
+});
+
+describe('WebSessionService — unverified visitors never attach to existing contacts', () => {
+  const existing = {
+    id: 'wa-contact',
+    account_id: ACCOUNT,
+    phone: PHONE,
+    name: 'Priya',
+    source: 'whatsapp',
+  };
+
+  it('creates a separate visitor contact and leaves the existing one untouched', async () => {
+    const { prisma, contacts } = makePrisma({ contacts: [existing] });
+    const result = await startAnonymous(makeService(prisma), {
+      name: 'Mallory',
+      email: 'm@example.com',
+      phone: PHONE,
+    });
+    expect(result.contactId).not.toBe('wa-contact');
+    expect(contacts).toHaveLength(2);
+    expect(contacts[0].web_visitor_id).toBeNull();
+    expect(contacts[0].email).toBeNull();
+  });
+
+  it.each([
+    [{ external_id: 'u', hmac: 123 }],
+    [{ external_id: 'u', hmac: 'nothex' }],
+    [{ external_id: 5, hmac: 'a'.repeat(64) }],
+    [{ external_id: 'u', hmac: 'a'.repeat(64) }],
+  ])('treats a malformed or wrong identity as unverified without throwing', async (identity) => {
+    const { prisma, contacts } = makePrisma({ contacts: [existing] });
+    const result = await startAnonymous(
+      makeService(prisma),
+      { name: 'Mallory', phone: PHONE },
+      identity,
+    );
+    expect(result.contactId).not.toBe('wa-contact');
+    expect(contacts).toHaveLength(2);
   });
 });

@@ -54,7 +54,7 @@ export class QrLoginService {
     private readonly limiter: RateLimitService,
   ) {}
 
-  async start(ip: string) {
+  async start(ip: string, userAgent = '') {
     await this.throttle(`qr-start:${ip}`, 20, 60_000);
     const id = randomBytes(16).toString('hex');
     const secret = randomBytes(32).toString('hex');
@@ -63,6 +63,11 @@ export class QrLoginService {
       .hset(key(id), {
         secret: sha256(secret).toString('hex'),
         status: 'pending',
+        // Shown on the approving phone so a user can spot a QR that was
+        // started by somebody else (QR-phishing / "quishing").
+        ip,
+        ua: userAgent.slice(0, 200),
+        createdAt: String(Date.now()),
       })
       .expire(key(id), TTL_SECONDS)
       .exec();
@@ -80,6 +85,24 @@ export class QrLoginService {
     const taken = await this.redis.del(key(id));
     if (taken !== 1) return { status: 'expired' };
     return { status: 'approved', tokenHash: rec.tokenHash };
+  }
+
+  /** Read-only: who started this QR? Lets the phone show origin BEFORE approving. */
+  async peek(userId: string, id: string, secret: string) {
+    this.assertShape(id, secret);
+    await this.throttle(`qr-approve:${userId}`, 20, 60_000);
+    const rec = await this.redis.hgetall(key(id));
+    if (!rec.secret) throw new NotFoundException('This QR code has expired.');
+    if (!this.matches(rec.secret, secret)) throw new NotFoundException();
+    return this.origin(rec);
+  }
+
+  private origin(rec: Record<string, string>) {
+    return {
+      ip: rec.ip ?? null,
+      userAgent: rec.ua ?? null,
+      startedAt: rec.createdAt ? Number(rec.createdAt) : null,
+    };
   }
 
   async approve(userId: string, id: string, secret: string) {
@@ -103,7 +126,7 @@ export class QrLoginService {
     );
     if (won !== 1)
       throw new ConflictException('This QR code was already used.');
-    return { ok: true };
+    return { ok: true, origin: this.origin(rec) };
   }
 
   // ── internals ──────────────────────────────────────────────────────────

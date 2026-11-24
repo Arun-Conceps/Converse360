@@ -14,7 +14,10 @@ import {
   matchReplyId,
   matchesKeywordTrigger,
 } from './flow-engine-helpers.util';
-import { interpolate } from '../../automations/services/automation-interpolation.util';
+import {
+  interpolate,
+  interpolateUrl,
+} from '../../automations/services/automation-interpolation.util';
 import type { AutomationContext } from '../../automations/automation.types';
 import type {
   AiHandoffNodeConfig,
@@ -563,7 +566,8 @@ export class FlowDispatchService {
     const flowContext = context ?? (await this.buildFlowContext(run, vars));
 
     const method = (cfg.method ?? 'GET').toUpperCase();
-    const url = interpolate(cfg.url ?? '', flowContext);
+    // Path/query values are percent-encoded; scheme + host stay as authored.
+    const url = interpolateUrl(cfg.url ?? '', flowContext);
     const headers: Record<string, string> = {};
     for (const [k, v] of Object.entries(cfg.headers ?? {})) {
       if (k?.trim()) headers[k] = interpolate(String(v ?? ''), flowContext);
@@ -1111,16 +1115,18 @@ export class FlowDispatchService {
       if (node.nodeType === 'send_template') {
         const cfg = node.config as unknown as SendTemplateNodeConfig;
         try {
-          await this.metaSend.sendTemplate({
-            accountId: run.accountId,
-            conversationId: run.conversationId!,
-            contactId: run.contactId!,
-            templateName: cfg.template_name,
-            language: cfg.language,
-            params: (cfg.body_params ?? []).map((p) =>
-              interpolate(p, flowContext),
-            ),
-          });
+          await this.channelSender.metered(run.accountId, () =>
+            this.metaSend.sendTemplate({
+              accountId: run.accountId,
+              conversationId: run.conversationId!,
+              contactId: run.contactId!,
+              templateName: cfg.template_name,
+              language: cfg.language,
+              params: (cfg.body_params ?? []).map((p) =>
+                interpolate(p, flowContext),
+              ),
+            }),
+          );
         } catch (err) {
           await this.logEvent(run.id, 'error', node.nodeKey, {
             reason: 'send_template_failed',
@@ -1135,19 +1141,21 @@ export class FlowDispatchService {
       if (node.nodeType === 'send_products') {
         const cfg = node.config as unknown as SendProductsNodeConfig;
         try {
-          await this.metaSend.sendProducts({
-            accountId: run.accountId,
-            conversationId: run.conversationId!,
-            contactId: run.contactId!,
-            mode: cfg.mode === 'list' ? 'list' : 'single',
-            catalogId: cfg.catalog_id,
-            productRetailerIds: cfg.product_retailer_ids ?? [],
-            headerText: cfg.header_text,
-            bodyText: cfg.body_text
-              ? interpolate(cfg.body_text, flowContext)
-              : undefined,
-            footerText: cfg.footer_text,
-          });
+          await this.channelSender.metered(run.accountId, () =>
+            this.metaSend.sendProducts({
+              accountId: run.accountId,
+              conversationId: run.conversationId!,
+              contactId: run.contactId!,
+              mode: cfg.mode === 'list' ? 'list' : 'single',
+              catalogId: cfg.catalog_id,
+              productRetailerIds: cfg.product_retailer_ids ?? [],
+              headerText: cfg.header_text,
+              bodyText: cfg.body_text
+                ? interpolate(cfg.body_text, flowContext)
+                : undefined,
+              footerText: cfg.footer_text,
+            }),
+          );
         } catch (err) {
           await this.logEvent(run.id, 'error', node.nodeKey, {
             reason: 'send_products_failed',
@@ -1269,7 +1277,13 @@ export class FlowDispatchService {
       }
       if (node.nodeType === 'http_request') {
         const cfg = node.config as unknown as HttpRequestNodeConfig;
-        const outcome = await this.executeHttpRequest(run, node, cfg, vars, flowContext);
+        const outcome = await this.executeHttpRequest(
+          run,
+          node,
+          cfg,
+          vars,
+          flowContext,
+        );
         if (outcome.failed) {
           await this.endRun(run.id, 'failed', 'http_request_failed');
           return { outcome: 'completed' };

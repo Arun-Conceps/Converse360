@@ -5,6 +5,7 @@ import {
   HttpStatus,
   Injectable,
   Logger,
+  UnauthorizedException,
   SetMetadata,
   UseGuards,
   applyDecorators,
@@ -97,10 +98,13 @@ export class EntitlementGuard implements CanActivate {
     if (!accountId) {
       // The auth guard should have run first. If it somehow did not, this
       // is not the place to decide who the caller is.
-      this.logger.warn(
-        `[entitlement] no account context on ${request.method} ${request.url}; skipping check`,
+      // Fail CLOSED: a missing context is a wiring bug, and letting the
+      // request through would skip the plan check entirely. (Lookup errors
+      // below still fail open, as documented in EntitlementService.)
+      this.logger.error(
+        `[entitlement] no account context on ${request.method} ${request.url}; refusing`,
       );
-      return true;
+      throw new UnauthorizedException();
     }
 
     const check = await this.entitlements.checkLimit(

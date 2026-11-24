@@ -490,6 +490,35 @@ describe('OnboardingService', () => {
       expect(prisma.user_subscriptions.upsert).not.toHaveBeenCalled();
     });
 
+    it('refuses to rewrite a past_due (dunning) subscription', async () => {
+      prisma.subscription_plans.findUnique.mockResolvedValue(STARTER);
+      primeState(prisma, subscriptions, {
+        subscription: { status: 'past_due', subscription_plans: { name: 'GROWTH' } },
+      });
+
+      await expect(service.selectPlan('acc-1', 'STARTER')).rejects.toThrow(
+        /already has a paid plan/,
+      );
+      expect(prisma.user_subscriptions.upsert).not.toHaveBeenCalled();
+    });
+
+    it('refuses when the owner row carries a gateway id', async () => {
+      prisma.subscription_plans.findUnique.mockResolvedValue(STARTER);
+      primeState(prisma, subscriptions, {
+        subscription: {
+          status: 'trial',
+          trial_end_at: new Date(Date.now() + 86_400_000),
+          razorpay_subscription_id: 'order_abc',
+          subscription_plans: { name: 'GROWTH' },
+        },
+      });
+
+      await expect(service.selectPlan('acc-1', 'STARTER')).rejects.toThrow(
+        /already has a paid plan/,
+      );
+      expect(prisma.user_subscriptions.upsert).not.toHaveBeenCalled();
+    });
+
     it('activates immediately when the plan carries no trial', async () => {
       prisma.subscription_plans.findUnique.mockResolvedValue({
         ...STARTER,
@@ -669,6 +698,20 @@ describe('OnboardingService', () => {
         name: 'ENTERPRISE',
       });
       primeState(prisma, subscriptions);
+    });
+
+    it('records but never rewrites a past_due (dunning) subscription', async () => {
+      primeState(prisma, subscriptions, {
+        subscription: {
+          status: 'past_due',
+          subscription_plans: { name: 'GROWTH' },
+        },
+      });
+
+      await service.submitEnquiry('acc-1', 'user-9', enquiry);
+
+      expect(prisma.plan_enquiries.create).toHaveBeenCalled();
+      expect(prisma.user_subscriptions.upsert).not.toHaveBeenCalled();
     });
 
     it('records the enquiry against the account and the caller', async () => {

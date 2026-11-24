@@ -1,9 +1,19 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
+
+import { REDIS_CLIENT } from '../../common/redis/redis.constants';
+import {
+  consumeStateNonce,
+  nonceCookieMatches,
+  stateNonce,
+  type NonceStore,
+} from '../../common/security/oauth-state.util';
 
 import { PrismaService } from '../../prisma/prisma.service';
 import { encrypt } from '../../common/security/encryption.util';
@@ -39,7 +49,7 @@ import {
 } from '../sandbox/fixtures';
 import {
   decodeAdsOAuthState,
-  encodeAdsOAuthState,
+  encodeAdsOAuthStateWithNonce,
 } from '../utils/ads-oauth-state.util';
 import { AdsConfigService } from './ads-config.service';
 
@@ -78,6 +88,7 @@ export class AdsConnectService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: AdsConfigService,
+    @Optional() @Inject(REDIS_CLIENT) private readonly redis?: NonceStore,
   ) {}
 
   // ------------------------------------------------------------
@@ -99,6 +110,19 @@ export class AdsConnectService {
     userId: string;
     returnTo?: string;
   }): string {
+    return this.startAuthorize(args).url;
+  }
+
+  /**
+   * Same as buildAuthorizeUrl, plus the state's nonce: the controller sets
+   * it as an HttpOnly cookie so the callback can prove it arrives in the
+   * browser that started the flow (login-CSRF defence).
+   */
+  startAuthorize(args: {
+    accountId: string;
+    userId: string;
+    returnTo?: string;
+  }): { url: string; nonce: string } {
     const { appId } = adsAppCredentials();
     const redirectUri = adsRedirectUri();
 
@@ -108,20 +132,25 @@ export class AdsConnectService {
       );
     }
 
+    const { state, nonce } = encodeAdsOAuthStateWithNonce({
+      accountId: args.accountId,
+      userId: args.userId,
+      returnTo: args.returnTo,
+    });
+
     const search = new URLSearchParams({
       client_id: appId,
       redirect_uri: redirectUri,
-      state: encodeAdsOAuthState({
-        accountId: args.accountId,
-        userId: args.userId,
-        returnTo: args.returnTo,
-      }),
+      state,
       scope: ADS_SCOPES.join(','),
       response_type: 'code',
       auth_type: 'rerequest',
     });
 
-    return `https://www.facebook.com/v23.0/dialog/oauth?${search.toString()}`;
+    return {
+      url: `https://www.facebook.com/v23.0/dialog/oauth?${search.toString()}`,
+      nonce,
+    };
   }
 
   // ------------------------------------------------------------
@@ -137,7 +166,12 @@ export class AdsConnectService {
    * while `ad_account_id IS NULL` would make every downstream
    * "connected?" check lie.
    */
-  async handleCallback(args: { code: string; state: string }): Promise<{
+  async handleCallback(args: {
+    code: string;
+    state: string;
+    /** Value of the nonce cookie set by the flow-start response. */
+    nonceCookie?: string;
+  }): Promise<{
     accountId: string;
     returnTo: string | null;
   }> {
@@ -148,6 +182,24 @@ export class AdsConnectService {
       // workspace to attach an ad account to.
       throw new BadRequestException(
         'This connection link has expired or is invalid. Start again from Ads Manager → Setup.',
+      );
+    }
+
+    // Bound to the browser that started the flow...
+    if (!nonceCookieMatches(args.state, args.nonceCookie)) {
+      throw new BadRequestException(
+        'This connection link was not started in this browser. Start again from Ads Manager → Setup.',
+      );
+    }
+    // ...and single use.
+    const fresh = await consumeStateNonce({
+      store: this.redis,
+      scope: 'ads',
+      nonce: stateNonce(args.state) as string,
+    });
+    if (!fresh) {
+      throw new BadRequestException(
+        'This connection link has already been used. Start again from Ads Manager → Setup.',
       );
     }
 

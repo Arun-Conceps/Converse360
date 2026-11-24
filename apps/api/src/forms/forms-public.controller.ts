@@ -54,6 +54,13 @@ class PublicSubmitMetaDto {
   utm?: Record<string, unknown>;
 }
 
+/**
+ * Wire name of the honeypot field inside `spam`: `{ spam: { honeypot } }`.
+ * Renderers must include a CSS-hidden input that posts under this key; any
+ * non-empty value is treated as a bot (see FormSubmitService.assertNotSpam).
+ */
+export const FORM_HONEYPOT_FIELD = 'honeypot';
+
 class PublicSubmitSpamDto {
   @IsOptional()
   @IsString()

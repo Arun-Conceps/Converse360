@@ -14,6 +14,7 @@
 // shouts this in copy.
 // ============================================================
 
+import { friendlyApiError } from '@/lib/auth/forbidden';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { Copy, Loader2, MessageCircle, Sparkles } from 'lucide-react';
@@ -122,7 +123,7 @@ export function InviteMemberDialog({
 
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
-        toast.error(payload.error || 'Failed to create invitation');
+        toast.error(friendlyApiError(res.status, payload.error, 'Failed to create invitation'));
         return;
       }
 

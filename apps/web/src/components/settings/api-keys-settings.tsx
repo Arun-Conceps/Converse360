@@ -15,6 +15,7 @@
 // bug (same lesson as the invite-link flow).
 // ============================================================
 
+import { friendlyApiError } from '@/lib/auth/forbidden';
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Copy, KeyRound, Loader2, Plus, Trash2 } from 'lucide-react';
@@ -81,7 +82,7 @@ export function ApiKeysSettings() {
       const res = await fetch('/api/account/api-keys', { cache: 'no-store' });
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
-        toast.error(payload.error || 'Failed to load API keys');
+        toast.error(friendlyApiError(res.status, payload.error, 'Failed to load API keys'));
         return;
       }
       const data = (await res.json()) as { keys: ApiKey[] };
@@ -106,7 +107,7 @@ export function ApiKeysSettings() {
       });
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
-        toast.error(payload.error || 'Failed to revoke key');
+        toast.error(friendlyApiError(res.status, payload.error, 'Failed to revoke key'));
         return;
       }
       toast.success(`Revoked "${key.name}"`);
@@ -320,7 +321,7 @@ function CreateKeyDialog({
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
-        toast.error(payload.error || 'Failed to create key');
+        toast.error(friendlyApiError(res.status, payload.error, 'Failed to create key'));
         return;
       }
       setCreatedKey(payload.plaintext as string);

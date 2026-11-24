@@ -1,4 +1,6 @@
 import { PrismaService } from '../../prisma/prisma.service';
+import { HttpStatus } from '@nestjs/common';
+import { ApiError } from './respond.util';
 import { Prisma } from '@prisma/client';
 import { normalizePhone, phonesMatch, toE164 } from './phone.util';
 import { resolveAccountCountry } from '../../common/phone/account-country.util';
@@ -129,8 +131,10 @@ export async function findOrCreateContact(
     await resolveAccountCountry(prisma, accountId),
   );
   if (!canonical) {
-    throw new Error(
+    throw new ApiError(
+      'invalid_phone',
       "'phone' must be a valid phone number in E.164 format (e.g. +14155550123)",
+      HttpStatus.BAD_REQUEST,
     );
   }
 
@@ -166,7 +170,11 @@ export async function findOrCreateContact(
       if (raced) return { id: raced.id, created: false };
     }
     console.error('[api/v1/contacts] create error:', error);
-    throw new Error('Failed to create contact');
+    throw new ApiError(
+      'internal',
+      'Failed to create contact',
+      HttpStatus.INTERNAL_SERVER_ERROR,
+    );
   }
 }
 

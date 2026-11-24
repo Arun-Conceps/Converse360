@@ -18,6 +18,7 @@ import {
 import { createClient } from '@/lib/supabase/client';
 import { MediaLibraryDialog } from '@/components/media/media-library';
 import { useAuth } from '@/hooks/use-auth';
+import { friendlyApiError } from '@/lib/auth/forbidden';
 import { useObjectUrl } from '@/hooks/use-object-url';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -102,7 +103,7 @@ const COMMON_LANGUAGE_CODES = [
 
 export function TemplateManager() {
   const supabase = createClient();
-  const { user, accountId, loading: authLoading } = useAuth();
+  const { user, accountId, loading: authLoading, canEditSettings } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
@@ -173,17 +174,20 @@ export function TemplateManager() {
       setLoading(false);
       return;
     }
-    fetchTemplates(user.id);
+    // Wait for the active workspace: filtering on null would show an empty
+    // list that looks like an empty workspace.
+    if (!accountId) return;
+    fetchTemplates(accountId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, user?.id]);
+  }, [authLoading, user?.id, accountId]);
 
-  async function fetchTemplates(userId: string) {
+  async function fetchTemplates(workspaceId: string) {
     try {
       setLoading(true);
       const { data, error } = await supabase
         .from('message_templates')
         .select('*')
-        .eq('user_id', userId)
+        .eq('account_id', workspaceId)
         .order('created_at', { ascending: false });
       if (error) throw error;
       setTemplates(data || []);
@@ -273,8 +277,11 @@ export function TemplateManager() {
       const data = await res.json();
       if (!res.ok) {
         throw new Error(
-          data?.error ||
+          friendlyApiError(
+            res.status,
+            data?.error,
             `${isEdit ? 'Edit' : 'Submit'} failed (HTTP ${res.status})`
+          )
         );
       }
       uploadedPaths = [];
@@ -313,7 +320,7 @@ export function TemplateManager() {
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data?.error || `Sync failed (HTTP ${res.status})`);
+        throw new Error(friendlyApiError(res.status, data?.error, `Sync failed (HTTP ${res.status})`));
       }
       const changes = [
         data.inserted ? `${data.inserted} new` : '',
@@ -368,7 +375,7 @@ export function TemplateManager() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data?.error || `Delete failed (HTTP ${res.status})`);
+        throw new Error(friendlyApiError(res.status, data?.error, `Delete failed (HTTP ${res.status})`));
       }
       toast.success('Template deleted');
       setTemplates((prev) => prev.filter((t) => t.id !== target.id));
@@ -425,7 +432,7 @@ export function TemplateManager() {
             <Button
               variant="outline"
               onClick={handleSyncFromMeta}
-              disabled={syncing}
+              disabled={syncing || !canEditSettings}
               title="Pull approved templates from your Meta WhatsApp Business Account"
             >
               <RefreshCw
@@ -433,7 +440,7 @@ export function TemplateManager() {
               />
               {syncing ? 'Syncing…' : 'Sync from Meta'}
             </Button>
-            <Button onClick={openCreate}>
+            <Button onClick={openCreate} disabled={!canEditSettings}>
               <Plus className="size-4" />
               New Template
             </Button>
@@ -530,7 +537,7 @@ export function TemplateManager() {
                     >
                       <Code2 className="size-4" />
                     </Button>
-                    {statusKey === 'APPROVED' && (
+                    {canEditSettings && statusKey === 'APPROVED' && (
                       <Button
                         variant="ghost"
                         size="sm"
@@ -543,7 +550,7 @@ export function TemplateManager() {
                         Edit
                       </Button>
                     )}
-                    {(statusKey === 'REJECTED' || statusKey === 'PAUSED') && (
+                    {canEditSettings && (statusKey === 'REJECTED' || statusKey === 'PAUSED') && (
                       <Button
                         variant="ghost"
                         size="sm"
@@ -560,7 +567,7 @@ export function TemplateManager() {
                       variant="ghost"
                       size="icon"
                       onClick={() => setTemplateToDelete(template)}
-                      disabled={deletingId === template.id}
+                      disabled={deletingId === template.id || !canEditSettings}
                       aria-label={
                         template.meta_template_id
                           ? 'Delete template from Meta and locally'

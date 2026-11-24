@@ -2,7 +2,8 @@
 
 import { refresh } from 'next/cache';
 
-import { requireCapability } from '@/lib/auth';
+import { recordAudit } from '@/lib/actions/audit';
+import { authorizeAction } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import {
   FieldError,
@@ -78,12 +79,26 @@ function readPlanFields(formData: FormData) {
   };
 }
 
+/** JSON-safe copy of plan fields for the audit detail (Decimals become strings). */
+function planSnapshot(
+  fields: Record<string, unknown>
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(fields).map(([key, value]) => [
+      key,
+      value !== null && typeof value === 'object' ? String(value) : value,
+    ])
+  );
+}
+
 /** Add a plan. `name` is its permanent key: lowercase, unique, never edited. */
 export async function createPlan(
   _previous: ActionState,
   formData: FormData
 ): Promise<ActionState> {
-  await requireCapability('billing.manage');
+  const auth = await authorizeAction('billing.manage');
+  if (auth.error) return { error: auth.error };
+  const staff = auth.staff;
 
   try {
     const name = text(formData, 'name', 'Plan key')
@@ -106,7 +121,7 @@ export async function createPlan(
       );
     }
 
-    await prisma.subscription_plans.create({
+    const created = await prisma.subscription_plans.create({
       data: {
         name,
         display_name: f.displayName,
@@ -122,6 +137,15 @@ export async function createPlan(
         max_storage_mb: f.maxStorageMb,
         is_active: f.isActive,
       },
+    });
+
+    await recordAudit({
+      actor: staff.actor,
+      action: 'plan.create',
+      targetType: 'plan',
+      targetId: created.id,
+      summary: `Created plan ${name} (${f.displayName}).`,
+      detail: { after: planSnapshot({ name, ...f }) },
     });
 
     refresh();
@@ -158,7 +182,9 @@ export async function updatePlan(
   _previous: ActionState,
   formData: FormData
 ): Promise<ActionState> {
-  await requireCapability('billing.manage');
+  const auth = await authorizeAction('billing.manage');
+  if (auth.error) return { error: auth.error };
+  const staff = auth.staff;
 
   try {
     const planId = uuid(formData, 'planId', 'Plan');
@@ -179,7 +205,22 @@ export async function updatePlan(
 
     const plan = await prisma.subscription_plans.findUnique({
       where: { id: planId },
-      select: { name: true, _count: { select: { user_subscriptions: true } } },
+      select: {
+        name: true,
+        display_name: true,
+        description: true,
+        price_monthly: true,
+        price_yearly: true,
+        trial_days: true,
+        max_contacts: true,
+        max_messages_monthly: true,
+        max_broadcasts_monthly: true,
+        max_flows: true,
+        max_team_members: true,
+        max_storage_mb: true,
+        is_active: true,
+        _count: { select: { user_subscriptions: true } },
+      },
     });
     if (!plan) throw new FieldError('That plan no longer exists.');
 
@@ -199,6 +240,45 @@ export async function updatePlan(
         max_storage_mb: maxStorageMb,
         is_active: isActive,
         updated_at: new Date(),
+      },
+    });
+
+    await recordAudit({
+      actor: staff.actor,
+      action: 'plan.update',
+      targetType: 'plan',
+      targetId: planId,
+      summary: `Updated plan ${plan.name}: monthly ${priceMonthly}, yearly ${priceYearly}, ${plan._count.user_subscriptions} subscription(s) affected.`,
+      detail: {
+        before: planSnapshot({
+          displayName: plan.display_name,
+          description: plan.description,
+          priceMonthly: plan.price_monthly,
+          priceYearly: plan.price_yearly,
+          trialDays: plan.trial_days,
+          maxContacts: plan.max_contacts,
+          maxMessagesMonthly: plan.max_messages_monthly,
+          maxBroadcastsMonthly: plan.max_broadcasts_monthly,
+          maxFlows: plan.max_flows,
+          maxTeamMembers: plan.max_team_members,
+          maxStorageMb: plan.max_storage_mb,
+          isActive: plan.is_active,
+        }),
+        after: planSnapshot({
+          displayName,
+          description,
+          priceMonthly,
+          priceYearly,
+          trialDays,
+          maxContacts,
+          maxMessagesMonthly,
+          maxBroadcastsMonthly,
+          maxFlows,
+          maxTeamMembers,
+          maxStorageMb,
+          isActive,
+        }),
+        affectedSubscriptions: plan._count.user_subscriptions,
       },
     });
 

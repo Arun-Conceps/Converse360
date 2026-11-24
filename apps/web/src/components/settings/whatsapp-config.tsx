@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
+import { friendlyApiError, ASK_ADMIN_MESSAGE } from '@/lib/auth/forbidden';
 import { useRefreshChannelStatus } from '@/hooks/use-channel-status';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -76,7 +77,7 @@ export function WhatsAppConfig() {
   // context and key every read off it — so a teammate who just
   // joined an account sees the inviter's saved config without
   // having to re-enter anything.
-  const { user, accountId, loading: authLoading, profileLoading } = useAuth();
+  const { user, accountId, loading: authLoading, profileLoading, canEditSettings } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -388,7 +389,7 @@ export function WhatsAppConfig() {
       const data = await res.json();
 
       if (!res.ok) {
-        toast.error(data.error || 'Failed to save configuration');
+        toast.error(friendlyApiError(res.status, data.error, 'Failed to save configuration'));
         setSaving(false);
         return;
       }
@@ -502,7 +503,7 @@ export function WhatsAppConfig() {
       const data = await res.json();
 
       if (!res.ok) {
-        toast.error(data.error || 'Failed to reset configuration');
+        toast.error(friendlyApiError(res.status, data.error, 'Failed to reset configuration'));
         return;
       }
 
@@ -575,7 +576,7 @@ export function WhatsAppConfig() {
                 </AlertDescription>
                 <Button
                   onClick={handleReset}
-                  disabled={resetting}
+                  disabled={resetting || !canEditSettings}
                   size="sm"
                   className="mt-3 bg-warning-surface text-warning hover:bg-warning/20 border-warning/30"
                 >
@@ -713,7 +714,7 @@ export function WhatsAppConfig() {
                 variant="outline"
                 size="sm"
                 onClick={handleVerifyRegistration}
-                disabled={verifyingRegistration}
+                disabled={verifyingRegistration || !canEditSettings}
                 className="border-border bg-transparent text-foreground hover:bg-muted h-7"
               >
                 {verifyingRegistration ? (
@@ -1003,7 +1004,8 @@ export function WhatsAppConfig() {
           {effectiveSetupMode === 'manual' && (
             <Button
               onClick={handleSave}
-              disabled={saving}
+              disabled={saving || !canEditSettings}
+              title={!canEditSettings ? ASK_ADMIN_MESSAGE : undefined}
               className="bg-primary hover:bg-primary/90 text-primary-foreground"
             >
               {saving ? (
@@ -1038,7 +1040,7 @@ export function WhatsAppConfig() {
             <Button
               variant="outline"
               onClick={handleReset}
-              disabled={resetting}
+              disabled={resetting || !canEditSettings}
               className="border-destructive/40 text-destructive hover:bg-destructive/10"
             >
               {resetting ? (

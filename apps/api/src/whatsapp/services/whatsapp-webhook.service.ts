@@ -340,70 +340,109 @@ export class WhatsappWebhookService {
   }): Promise<void> {
     if (!body.entry) return;
 
+    if (!Array.isArray(body.entry)) return;
+
     for (const entry of body.entry) {
-      for (const change of entry.changes) {
-        if (isTemplateWebhookField(change.field)) {
-          await handleTemplateWebhookChange(
-            { field: change.field, value: change.value },
-            this.prisma,
-          );
-          continue;
-        }
-
-        if (isLimitWebhookField(change.field)) {
-          await this.handleLimitUpdate(
-            change.field,
-            change.value as LimitWebhookValue,
-            entry.id,
-          );
-          continue;
-        }
-
-        const value = change.value;
-
-        if (value.statuses) {
-          for (const status of value.statuses) {
-            await this.handleStatusUpdate(status);
+      try {
+        if (!entry || !Array.isArray(entry.changes)) continue;
+        for (const change of entry.changes) {
+          try {
+            await this.processChange(entry, change);
+          } catch (err) {
+            // Meta already has its 200 and will not retry: one bad change
+            // must not discard the rest of the delivery. Only identifiers
+            // are logged, never the payload.
+            this.logger.error(
+              `webhook change failed (entry=${entry?.id ?? 'unknown'} field=${change?.field ?? 'unknown'}): ${err instanceof Error ? err.message : String(err)}`,
+            );
           }
         }
+      } catch (err) {
+        this.logger.error(
+          `webhook entry failed (entry=${entry?.id ?? 'unknown'}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
 
-        if (!value.messages || !value.contacts) continue;
+  private async processChange(
+    entry: WhatsAppWebhookEntry,
+    change: WhatsAppWebhookEntry['changes'][number],
+  ): Promise<void> {
+    if (isTemplateWebhookField(change.field)) {
+      await handleTemplateWebhookChange(
+        { field: change.field, value: change.value },
+        this.prisma,
+      );
+      return;
+    }
 
-        const phoneNumberId = value.metadata.phone_number_id;
+    if (isLimitWebhookField(change.field)) {
+      await this.handleLimitUpdate(
+        change.field,
+        change.value as LimitWebhookValue,
+        entry.id,
+      );
+      return;
+    }
 
-        const configRows = await this.prisma.whatsapp_config.findMany({
-          where: { phone_number_id: phoneNumberId },
-        });
+    const value = change.value;
+    if (!value) return;
 
-        if (configRows.length === 0) {
+    if (Array.isArray(value.statuses)) {
+      for (const status of value.statuses) {
+        try {
+          await this.handleStatusUpdate(status);
+        } catch (err) {
           this.logger.error(
-            `No config found for phone_number_id: ${phoneNumberId}`,
-          );
-          continue;
-        }
-
-        if (configRows.length > 1) {
-          this.logger.error(
-            `Multiple configs (${configRows.length}) found for phone_number_id: ${phoneNumberId} — inbound message dropped.`,
-          );
-          continue;
-        }
-
-        const config = configRows[0];
-        const decryptedAccessToken = decrypt(config.access_token);
-
-        for (let i = 0; i < value.messages.length; i++) {
-          const message = value.messages[i];
-          const contact = value.contacts[i] || value.contacts[0];
-
-          await this.processMessage(
-            message,
-            contact,
-            config.account_id,
-            config.user_id,
-            decryptedAccessToken,
+            `status update failed: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
+      }
+    }
+
+    if (!value.messages || !value.contacts) return;
+
+    const phoneNumberId = value.metadata?.phone_number_id;
+    if (!phoneNumberId) {
+      this.logger.error('inbound webhook without metadata.phone_number_id — dropped.');
+      return;
+    }
+
+    const configRows = await this.prisma.whatsapp_config.findMany({
+      where: { phone_number_id: phoneNumberId },
+    });
+
+    if (configRows.length === 0) {
+      this.logger.error(`No config found for phone_number_id: ${phoneNumberId}`);
+      return;
+    }
+
+    if (configRows.length > 1) {
+      this.logger.error(
+        `Multiple configs (${configRows.length}) found for phone_number_id: ${phoneNumberId} — inbound message dropped.`,
+      );
+      return;
+    }
+
+    const config = configRows[0];
+    const decryptedAccessToken = decrypt(config.access_token);
+
+    for (let i = 0; i < value.messages.length; i++) {
+      const message = value.messages[i];
+      const contact = value.contacts[i] || value.contacts[0];
+      try {
+        await this.processMessage(
+          message,
+          contact,
+          config.account_id,
+          config.user_id,
+          decryptedAccessToken,
+        );
+      } catch (err) {
+        this.logger.error(
+          `inbound message failed (phone_number_id=${phoneNumberId}): ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
   }

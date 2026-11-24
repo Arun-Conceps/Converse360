@@ -5,10 +5,15 @@ import {
   Get,
   Post,
   Query,
+  Req,
   Res,
   UseGuards,
 } from '@nestjs/common';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
+import { oauthNonceCookieOptions } from '../../common/security/oauth-state.util';
+
+/** Holds the OAuth state's nonce between /oauth/start and the callback. */
+export const ADS_OAUTH_NONCE_COOKIE = 'c360_ads_oauth';
 
 import { SupabaseAuthGuard } from '../../auth/guards/supabase-auth.guard';
 import { RequireRole } from '../../auth/decorators/require-role.decorator';
@@ -90,14 +95,16 @@ export class AdsConnectController {
   start(
     @CurrentAccount() account: SupabaseAccountContext,
     @Query() query: StartOAuthQueryDto,
+    @Res({ passthrough: true }) res: Response,
   ): { url: string } {
-    return {
-      url: this.connect.buildAuthorizeUrl({
-        accountId: account.accountId,
-        userId: account.userId,
-        returnTo: query.returnTo,
-      }),
-    };
+    const { url, nonce } = this.connect.startAuthorize({
+      accountId: account.accountId,
+      userId: account.userId,
+      returnTo: query.returnTo,
+    });
+    // Binds the flow to THIS browser: the callback must present it.
+    res.cookie(ADS_OAUTH_NONCE_COOKIE, nonce, oauthNonceCookieOptions());
+    return { url };
   }
 
   /**
@@ -312,6 +319,7 @@ export class AdsOAuthController {
     @Query('error') error: string | undefined,
     @Query('error_description') errorDescription: string | undefined,
     @Query('error_reason') errorReason: string | undefined,
+    @Req() req: Request,
     @Res() res: Response,
   ) {
     // The landing page is a fixed allowlist entry, not anything from the
@@ -333,7 +341,15 @@ export class AdsOAuthController {
     }
 
     try {
-      const { returnTo } = await this.connect.handleCallback({ code, state });
+      const nonceCookie = (
+        req.cookies as Record<string, string> | undefined
+      )?.[ADS_OAUTH_NONCE_COOKIE];
+      res.clearCookie(ADS_OAUTH_NONCE_COOKIE, { path: '/' });
+      const { returnTo } = await this.connect.handleCallback({
+        code,
+        state,
+        nonceCookie,
+      });
       const target =
         returnTo && returnTo in RETURN_PATHS
           ? `${appUrl()}${RETURN_PATHS[returnTo as 'setup' | 'create']}`

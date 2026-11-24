@@ -71,7 +71,8 @@ export class WhatsappMediaController {
       res.set({
         'Content-Type':
           contentType || mediaInfo.mimeType || 'application/octet-stream',
-        'Cache-Control': 'public, max-age=86400',
+        'Cache-Control': 'private, max-age=86400',
+        Vary: 'Authorization, Cookie',
       });
       return res.status(HttpStatus.OK).send(Buffer.from(buffer));
     } catch (err) {

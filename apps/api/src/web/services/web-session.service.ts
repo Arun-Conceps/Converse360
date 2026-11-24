@@ -195,7 +195,12 @@ export class WebSessionService {
 
     let created: { contactId: string; conversationId: string };
     try {
-      created = await this.openThread(input, visitorId, canonicalPhone);
+      created = await this.openThread(
+        input,
+        visitorId,
+        canonicalPhone,
+        verifiedIdentity !== null,
+      );
     } catch (err) {
       // Two first-time visits with the same number can both see "no
       // contact" and both insert; the loser gets P2002. Retried whole,
@@ -204,7 +209,12 @@ export class WebSessionService {
       // second pass the winner's row exists and the lookup path takes
       // over.
       if ((err as { code?: string })?.code !== 'P2002') throw err;
-      created = await this.openThread(input, visitorId, canonicalPhone);
+      created = await this.openThread(
+        input,
+        visitorId,
+        canonicalPhone,
+        verifiedIdentity !== null,
+      );
     }
 
     await this.recordSession({
@@ -248,6 +258,7 @@ export class WebSessionService {
     input: StartSessionInput,
     visitorId: string,
     canonicalPhone: string,
+    verified: boolean,
   ): Promise<{ contactId: string; conversationId: string }> {
     return this.prisma.$transaction(async (tx) => {
       const contactId = await this.resolveContact(tx, {
@@ -255,6 +266,7 @@ export class WebSessionService {
         ownerUserId: input.ownerUserId,
         visitorId,
         phone: canonicalPhone,
+        verified,
         name: input.profile?.name?.trim(),
         email: input.profile?.email?.trim(),
       });
@@ -316,6 +328,8 @@ export class WebSessionService {
       ownerUserId: string;
       visitorId: string;
       phone: string;
+      /** True only when the customer's server vouched for this visitor (HMAC). */
+      verified: boolean;
       name?: string;
       email?: string;
     },
@@ -334,7 +348,15 @@ export class WebSessionService {
         })
       : null;
 
-    if (!existing) {
+    // A typed phone number is a claim, not proof. Attaching an unverified
+    // visitor to an existing contact would let a stranger who guesses a
+    // number touch (and be shown as) that customer. Without HMAC identity
+    // we keep a SEPARATE visitor contact; since the phone is already taken
+    // (unique per account) it is stored without one — the identity check
+    // allows web_visitor_id alone.
+    const phoneTaken = Boolean(existing) && !args.verified;
+
+    if (!existing || phoneTaken) {
       const created = await tx.contacts.create({
         data: {
           account_id: args.accountId,
@@ -342,7 +364,7 @@ export class WebSessionService {
           web_visitor_id: args.visitorId,
           name: args.name ?? null,
           email: args.email ?? null,
-          phone: args.phone,
+          phone: phoneTaken ? null : args.phone,
           source: 'web',
         },
         select: { id: true },
@@ -387,7 +409,14 @@ export class WebSessionService {
     identity: StartSessionInput['identity'],
     secret: string,
   ): string | null {
-    if (!identity?.external_id || !identity.hmac) return null;
+    if (
+      typeof identity?.external_id !== 'string' ||
+      typeof identity.hmac !== 'string' ||
+      !identity.external_id ||
+      !/^[0-9a-fA-F]{64}$/.test(identity.hmac)
+    ) {
+      return null;
+    }
 
     const expected = createHmac('sha256', secret)
       .update(identity.external_id)

@@ -19,6 +19,8 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { useAuth } from '@/hooks/use-auth';
+import { friendlyApiError } from '@/lib/auth/forbidden';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
@@ -53,6 +55,7 @@ interface WhatsAppProduct {
 }
 
 export function CatalogueTab() {
+  const { canEditSettings } = useAuth();
   const [products, setProducts] = useState<WhatsAppProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -90,7 +93,7 @@ export function CatalogueTab() {
     try {
       const res = await fetch('/api/whatsapp/products');
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to fetch products');
+      if (!res.ok) throw new Error(friendlyApiError(res.status, data.error, 'Failed to fetch products'));
       setProducts(data.products || []);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to load products');
@@ -121,7 +124,7 @@ export function CatalogueTab() {
         body: JSON.stringify({ catalog_id: value || null }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to save Catalog ID');
+      if (!res.ok) throw new Error(friendlyApiError(res.status, data.error, 'Failed to save Catalog ID'));
       setSavedCatalogId(data.catalog_id ?? null);
       setCatalogIdInput(data.catalog_id ?? '');
       toast.success(
@@ -187,7 +190,7 @@ export function CatalogueTab() {
         body: JSON.stringify(formData),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to add product');
+      if (!res.ok) throw new Error(friendlyApiError(res.status, data.error, 'Failed to add product'));
       toast.success('Product created and pushed to Meta Catalog successfully!');
       setAddOpen(false);
       fetchProducts();
@@ -209,7 +212,7 @@ export function CatalogueTab() {
         body: JSON.stringify(formData),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to update product');
+      if (!res.ok) throw new Error(friendlyApiError(res.status, data.error, 'Failed to update product'));
       toast.success('Product updated and synced with Meta Catalog!');
       setEditOpen(false);
       fetchProducts();
@@ -229,7 +232,7 @@ export function CatalogueTab() {
       });
       if (!res.ok) {
         const data = await res.json();
-        throw new Error(data.error || 'Failed to delete product');
+        throw new Error(friendlyApiError(res.status, data.error, 'Failed to delete product'));
       }
       toast.success('Product deleted and removed from Meta Catalog');
       setDeleteOpen(false);
@@ -251,7 +254,7 @@ export function CatalogueTab() {
       const res = await fetch('/api/whatsapp/products/sync', { method: 'POST' });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to sync catalog');
+        throw new Error(friendlyApiError(res.status, data.error, 'Failed to sync catalog'));
       }
       if (data.failed > 0) {
         const first = data.errors?.[0]?.message
@@ -283,7 +286,7 @@ export function CatalogueTab() {
       const res = await fetch('/api/whatsapp/products/import', { method: 'POST' });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to import catalog');
+        throw new Error(friendlyApiError(res.status, data.error, 'Failed to import catalog'));
       }
       const parts: string[] = [];
       if (data.imported) parts.push(`${data.imported} new`);
@@ -339,7 +342,7 @@ export function CatalogueTab() {
             variant="outline"
             className="self-end border-border hover:bg-muted/30"
             onClick={handleSaveCatalogId}
-            disabled={savingCatalog || catalogIdInput.trim() === (savedCatalogId ?? '')}
+            disabled={!canEditSettings || savingCatalog || catalogIdInput.trim() === (savedCatalogId ?? '')}
           >
             {savingCatalog ? (
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -393,7 +396,7 @@ export function CatalogueTab() {
             variant="outline"
             className="border-border hover:bg-muted/30"
             onClick={handleImportFromMeta}
-            disabled={importingMeta || !savedCatalogId}
+            disabled={!canEditSettings || importingMeta || !savedCatalogId}
             title={
               savedCatalogId
                 ? 'Pull products that already exist in your Meta Catalog into this app'
@@ -412,7 +415,7 @@ export function CatalogueTab() {
             variant="outline"
             className="border-border hover:bg-muted/30"
             onClick={handleSyncMetaCatalog}
-            disabled={syncingMeta || products.length === 0}
+            disabled={!canEditSettings || syncingMeta || products.length === 0}
             title={
               products.length === 0
                 ? 'No local products to push — add products or import from Meta first'
@@ -429,7 +432,7 @@ export function CatalogueTab() {
 
           <Button
             className="bg-primary text-primary-foreground hover:bg-primary/90"
-            onClick={handleOpenAdd}
+            onClick={handleOpenAdd} disabled={!canEditSettings}
           >
             <Plus className="h-4 w-4 mr-1.5" />
             Add Product
@@ -459,7 +462,7 @@ export function CatalogueTab() {
                 <Button
                   variant="outline"
                   onClick={handleImportFromMeta}
-                  disabled={importingMeta}
+                  disabled={!canEditSettings || importingMeta}
                 >
                   {importingMeta ? (
                     <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
@@ -469,7 +472,7 @@ export function CatalogueTab() {
                   Import from Meta
                 </Button>
               )}
-              <Button onClick={handleOpenAdd}>
+              <Button onClick={handleOpenAdd} disabled={!canEditSettings}>
                 <Plus className="h-4 w-4 mr-1.5" />
                 Create First Product
               </Button>
@@ -524,10 +527,10 @@ export function CatalogueTab() {
                     Synced to Meta
                   </div>
                   <div className="flex items-center gap-1">
-                    <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" onClick={() => handleOpenEdit(p)}>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted" onClick={() => handleOpenEdit(p)} disabled={!canEditSettings}>
                       <Edit className="h-4.5 w-4.5 text-muted-foreground hover:text-foreground" />
                     </Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-destructive/10" onClick={() => handleOpenDelete(p)}>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-destructive/10" onClick={() => handleOpenDelete(p)} disabled={!canEditSettings}>
                       <Trash2 className="h-4.5 w-4.5 text-muted-foreground hover:text-destructive" />
                     </Button>
                   </div>
@@ -580,10 +583,10 @@ export function CatalogueTab() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleOpenEdit(p)}>
+                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleOpenEdit(p)} disabled={!canEditSettings}>
                         <Edit className="h-4 w-4" />
                       </Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-destructive/10" onClick={() => handleOpenDelete(p)}>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-destructive/10" onClick={() => handleOpenDelete(p)} disabled={!canEditSettings}>
                         <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>
                     </div>

@@ -66,7 +66,7 @@ export class OnboardingController {
     @CurrentAccount() account: SupabaseAccountContext,
     @Body() dto: SelectPlanDto,
   ): Promise<OnboardingState> {
-    this.assertCanConfigure(account);
+    this.assertIsOwner(account);
     return this.onboardingService.selectPlan(
       account.accountId,
       dto.planName,
@@ -80,12 +80,23 @@ export class OnboardingController {
     @CurrentAccount() account: SupabaseAccountContext,
     @Body() dto: PlanEnquiryDto,
   ): Promise<OnboardingState> {
-    this.assertCanConfigure(account);
+    this.assertIsOwner(account);
     return this.onboardingService.submitEnquiry(
       account.accountId,
       account.userId,
       dto,
     );
+  }
+
+  /**
+   * Plan mutation is the owner's: `user_subscriptions` is keyed by
+   * `accounts.owner_user_id`, so an admin changing the plan rewrites the
+   * OWNER's subscription.
+   */
+  private assertIsOwner(account: SupabaseAccountContext): void {
+    if (account.role !== 'owner') {
+      throw new ForbiddenException('Only the workspace owner can change the plan');
+    }
   }
 
   private assertCanConfigure(account: SupabaseAccountContext): void {

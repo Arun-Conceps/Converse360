@@ -326,7 +326,17 @@ export class OnboardingService {
     const ownerUserId = await this.getOwnerUserId(accountId);
     const existing = await this.findOwnerSubscription(ownerUserId);
 
-    if (existing?.status === 'active') {
+    // `past_due` is dunning on a paying customer, and a live row carrying a
+    // gateway id is somebody's payment relationship: neither may be
+    // rewritten by the wizard endpoint. Plan changes for a payer belong to
+    // checkout.
+    if (
+      existing?.status === 'active' ||
+      existing?.status === 'past_due' ||
+      (existing !== null &&
+        (ENTITLED_STATUSES as readonly string[]).includes(existing.status) &&
+        (await this.ownerHasGatewayRecord(ownerUserId)))
+    ) {
       throw new BadRequestException(
         'This workspace already has a paid plan. Change it from Settings → ' +
           'Plan & billing.',
@@ -536,6 +546,15 @@ export class OnboardingService {
     }
 
     return plan;
+  }
+
+  /** True when the owner's row is attached to a Stripe/Razorpay id. */
+  private async ownerHasGatewayRecord(ownerUserId: string): Promise<boolean> {
+    const row = await this.prisma.user_subscriptions.findUnique({
+      where: { user_id: ownerUserId },
+      select: { stripe_subscription_id: true, razorpay_subscription_id: true },
+    });
+    return !!(row?.stripe_subscription_id || row?.razorpay_subscription_id);
   }
 
   private async findOwnerSubscription(ownerUserId: string) {

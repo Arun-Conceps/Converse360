@@ -1,0 +1,26 @@
+# Repo-root build context (all Dockerfiles use `context: .`).
+node_modules
+**/node_modules
+.git
+**/.next
+**/dist
+**/coverage
+**/*.tsbuildinfo
+*.pdf
+**/*.pdf
+docs
+notes
+supabase
+scripts/demo
+
+# Secrets for the api and admin panel are supplied at RUNTIME through
+# docker-compose `env_file`, so they must not be baked into image layers.
+apps/api/.env
+apps/api/.env.*
+!apps/api/.env.example
+apps/admin-panel/.env
+apps/admin-panel/.env.*
+!apps/admin-panel/.env.local.example
+
+# DELIBERATELY NOT IGNORED: apps/web/.env.local* — the web image build bakes
+# NEXT_PUBLIC_* values from it (apps/web/Dockerfile COPYs it).

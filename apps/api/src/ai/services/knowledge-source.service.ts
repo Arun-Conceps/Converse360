@@ -8,13 +8,22 @@ import { ingestDocument } from '../lib/knowledge';
 import { AiError } from '../lib/types';
 import { AiCreditsService } from '../credits/ai-credits.service';
 
-export type KnowledgeStatus = 'ready' | 'indexing' | 'lexical' | 'failed' | 'stale';
+export type KnowledgeStatus =
+  'ready' | 'indexing' | 'lexical' | 'failed' | 'stale';
 
 interface IngestOutcome {
   status: KnowledgeStatus;
   chunk_count: number;
   warning: string | null;
 }
+
+/**
+ * Per-workspace ceilings. Documents are stored, chunked and (on the
+ * platform key) embedded at our cost, so an unbounded library is an
+ * unbounded bill. Generous for a real business, small for an abuser.
+ */
+export const MAX_KNOWLEDGE_DOCUMENTS = 200;
+export const MAX_KNOWLEDGE_TOTAL_BYTES = 50 * 1024 * 1024;
 
 /**
  * ============================================================
@@ -41,6 +50,48 @@ export class KnowledgeSourceService {
     private readonly prisma: PrismaService,
     private readonly credits: AiCreditsService,
   ) {}
+
+  /**
+   * Refuse a new/changed document that would push the workspace past the
+   * library caps. `replacingId` excludes the document being rewritten so
+   * an edit is judged by its net growth.
+   */
+  async assertCapacity(args: {
+    accountId: string;
+    addBytes: number;
+    replacingId?: string;
+  }): Promise<void> {
+    const where = {
+      account_id: args.accountId,
+      ...(args.replacingId ? { id: { not: args.replacingId } } : {}),
+    };
+    const [count, sum] = await Promise.all([
+      this.prisma.ai_knowledge_documents.count({ where }),
+      this.prisma.ai_knowledge_documents.aggregate({
+        where,
+        _sum: { byte_size: true },
+      }),
+    ]);
+    const used = Number(sum._sum.byte_size ?? 0);
+    if (!args.replacingId && count >= MAX_KNOWLEDGE_DOCUMENTS) {
+      throw new HttpException(
+        {
+          error: `Your library holds ${MAX_KNOWLEDGE_DOCUMENTS} documents, the most a workspace can keep. Delete one to add another.`,
+          code: 'knowledge_limit_documents',
+        },
+        HttpStatus.PAYLOAD_TOO_LARGE,
+      );
+    }
+    if (used + args.addBytes > MAX_KNOWLEDGE_TOTAL_BYTES) {
+      throw new HttpException(
+        {
+          error: `That would take your library past ${MAX_KNOWLEDGE_TOTAL_BYTES / 1024 / 1024} MB of text. Delete something first.`,
+          code: 'knowledge_limit_bytes',
+        },
+        HttpStatus.PAYLOAD_TOO_LARGE,
+      );
+    }
+  }
 
   async list(accountId: string) {
     const documents = await this.prisma.ai_knowledge_documents.findMany({
@@ -91,10 +142,22 @@ export class KnowledgeSourceService {
     content: string;
   }): Promise<IngestOutcome> {
     const { accountId, documentId, content } = args;
-    const { key, corrupt, provider, model, source } = await loadEmbeddingsKey(
-      this.prisma,
-      accountId,
-    );
+    const loaded = await loadEmbeddingsKey(this.prisma, accountId);
+    const { corrupt, provider, model, source } = loaded;
+    let key = loaded.key;
+
+    // Gate BEFORE embedding: on OUR key an empty wallet must not keep
+    // spending. Degrade to keyword-only indexing (chunks are still
+    // written, retrieval still works) rather than failing the save.
+    let outOfCredits = false;
+    if (
+      source === 'platform' &&
+      key &&
+      !(await this.credits.hasBalance(accountId))
+    ) {
+      key = null;
+      outOfCredits = true;
+    }
 
     let status: KnowledgeStatus = 'ready';
     let warning: string | null = null;
@@ -141,7 +204,9 @@ export class KnowledgeSourceService {
         status = 'lexical';
         warning = corrupt
           ? 'Saved with keyword search only — your embeddings key could not be decrypted (check ENCRYPTION_KEY, then re-enter it).'
-          : null;
+          : outOfCredits
+            ? 'Saved with keyword search only — you are out of AI credits. Top up, then use Reindex for semantic search.'
+            : null;
       }
     } catch (err) {
       this.logger.error(`[knowledge] indexing ${documentId} failed: ${err}`);
@@ -172,12 +237,18 @@ export class KnowledgeSourceService {
     title: string;
     content: string;
   }) {
+    const byteSize = Buffer.byteLength(args.content, 'utf8');
+    await this.assertCapacity({
+      accountId: args.accountId,
+      addBytes: byteSize,
+    });
     const doc = await this.prisma.ai_knowledge_documents.create({
       data: {
         account_id: args.accountId,
         created_by: args.userId,
         title: args.title,
         content: args.content,
+        byte_size: byteSize,
         source_type: 'text',
         status: 'indexing',
       },
@@ -224,6 +295,12 @@ export class KnowledgeSourceService {
       byte_size: Buffer.byteLength(page.text, 'utf8'),
       status: 'indexing' as const,
     };
+
+    await this.assertCapacity({
+      accountId: args.accountId,
+      addBytes: data.byte_size,
+      replacingId: args.documentId,
+    });
 
     let documentId: string;
     if (args.documentId) {
@@ -292,7 +369,10 @@ export class KnowledgeSourceService {
     // the bad characters, so an empty result is the only signal.
     if (bytes.byteLength === 0) {
       throw new HttpException(
-        { error: 'That upload was empty or not valid base64.', code: 'upload_invalid' },
+        {
+          error: 'That upload was empty or not valid base64.',
+          code: 'upload_invalid',
+        },
         HttpStatus.BAD_REQUEST,
       );
     }
@@ -317,6 +397,11 @@ export class KnowledgeSourceService {
       args.title?.trim().slice(0, 200) ||
       args.fileName.replace(/\.[a-z0-9]+$/i, '').slice(0, 200) ||
       'Uploaded document';
+
+    await this.assertCapacity({
+      accountId: args.accountId,
+      addBytes: Buffer.byteLength(extracted.text, 'utf8'),
+    });
 
     const doc = await this.prisma.ai_knowledge_documents.create({
       data: {
@@ -360,6 +445,14 @@ export class KnowledgeSourceService {
     });
     if (!existing) {
       throw new HttpException('Not found', HttpStatus.NOT_FOUND);
+    }
+
+    if (args.content !== undefined) {
+      await this.assertCapacity({
+        accountId: args.accountId,
+        addBytes: Buffer.byteLength(args.content, 'utf8'),
+        replacingId: existing.id,
+      });
     }
 
     const data: Record<string, unknown> = {};

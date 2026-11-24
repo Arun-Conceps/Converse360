@@ -6,13 +6,13 @@ import {
   Param,
   Body,
   Res,
-  Req,
   HttpStatus,
   UseGuards,
   Logger,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { RequiresEntitlement } from '../../subscription/guards/entitlement.guard';
-import type { Request, Response } from 'express';
+import type { Response } from 'express';
 import { SupabaseAuthGuard } from '../../auth/guards/supabase-auth.guard';
 import { RequireRole } from '../../auth/decorators/require-role.decorator';
 import { CurrentAccount } from '../../auth/decorators/current-account.decorator';
@@ -37,25 +37,26 @@ function isInviteRole(v: unknown): v is InviteRole {
   );
 }
 
-/** Resolve the base URL for invite links, honouring the same priority chain as the legacy route. */
-function getBaseUrl(req: Request): string {
-  const explicit = process.env.NEXT_PUBLIC_SITE_URL?.trim();
-  if (explicit) return explicit.replace(/\/+$/, '');
+const MAX_PENDING_INVITES = 50;
 
-  const forwardedHost = (req.headers['x-forwarded-host'] as string | undefined)
-    ?.split(',')[0]
-    ?.trim();
-  const forwardedProto = (
-    req.headers['x-forwarded-proto'] as string | undefined
-  )
-    ?.split(',')[0]
-    ?.trim();
-  if (forwardedHost) return `${forwardedProto ?? 'https'}://${forwardedHost}`;
-
-  const host = req.headers.host;
-  if (host) return `${req.protocol}://${host}`;
-
-  return 'https://converse360.com';
+/**
+ * Base URL for invite links. Deliberately NOT derived from Host or
+ * X-Forwarded-Host: those are request-controlled, so reflecting them lets
+ * a spoofed header mint invite links pointing at an attacker's domain.
+ */
+export function getBaseUrl(): string {
+  const configured = (
+    process.env.NEXT_PUBLIC_SITE_URL ??
+    process.env.APP_URL ??
+    process.env.SITE_URL ??
+    ''
+  ).trim();
+  if (!configured) {
+    throw new ServiceUnavailableException(
+      'Invite links are not configured: set NEXT_PUBLIC_SITE_URL (or APP_URL).',
+    );
+  }
+  return configured.replace(/\/+$/, '');
 }
 
 @Controller('account')
@@ -108,7 +109,6 @@ export class AccountInvitationsController {
   async createInvitation(
     @CurrentAccount() account: SupabaseAccountContext,
     @Body() body: { role?: unknown; expiresInDays?: unknown; label?: unknown },
-    @Req() req: Request,
     @Res() res: Response,
   ) {
     const role = body?.role;
@@ -141,6 +141,21 @@ export class AccountInvitationsController {
       label = trimmed === '' ? null : trimmed;
     }
 
+    const baseUrl = getBaseUrl();
+
+    const pending = await this.prisma.account_invitations.count({
+      where: {
+        account_id: account.accountId,
+        accepted_at: null,
+        expires_at: { gt: new Date() },
+      },
+    });
+    if (pending >= MAX_PENDING_INVITES) {
+      return res.status(HttpStatus.CONFLICT).json({
+        error: `Limit of ${MAX_PENDING_INVITES} pending invitations reached. Revoke some first.`,
+      });
+    }
+
     const { token, hash } = generateInviteToken();
 
     const invitation = await this.prisma.account_invitations.create({
@@ -164,7 +179,7 @@ export class AccountInvitationsController {
     return res.status(HttpStatus.CREATED).json({
       invitation,
       token,
-      url: inviteUrl(token, getBaseUrl(req)),
+      url: inviteUrl(token, baseUrl),
       expiresInDays: expiryDays,
     });
   }

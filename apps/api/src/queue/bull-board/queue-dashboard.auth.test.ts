@@ -75,3 +75,23 @@ describe('checkBasicAuth', () => {
     expect(checkBasicAuth(basic('ops', 'correct'), CREDS)).toBe(false);
   });
 });
+
+import { AuthThrottle } from './queue-dashboard.auth';
+
+describe('AuthThrottle', () => {
+  it('blocks after max failures within the window and recovers after it', () => {
+    let t = 0;
+    const th = new AuthThrottle(3, 1000, () => t);
+    for (let i = 0; i < 3; i++) th.recordFailure('ip');
+    expect(th.isBlocked('ip')).toBe(true);
+    expect(th.isBlocked('other')).toBe(false);
+    t = 1500;
+    expect(th.isBlocked('ip')).toBe(false);
+  });
+  it('reset clears failures', () => {
+    const th = new AuthThrottle(1, 1000);
+    th.recordFailure('ip');
+    th.reset('ip');
+    expect(th.isBlocked('ip')).toBe(false);
+  });
+});

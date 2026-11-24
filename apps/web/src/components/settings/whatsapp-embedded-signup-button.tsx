@@ -4,6 +4,8 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { toast } from 'sonner';
 import { Loader2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useAuth } from '@/hooks/use-auth';
+import { friendlyApiError, ASK_ADMIN_MESSAGE } from '@/lib/auth/forbidden';
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- the Facebook JS SDK ships no types */
 declare global {
@@ -37,6 +39,7 @@ interface WhatsAppEmbeddedSignupButtonProps {
 export function WhatsAppEmbeddedSignupButton({
   onConnected,
 }: WhatsAppEmbeddedSignupButtonProps) {
+  const { canEditSettings } = useAuth();
   const appId = process.env.NEXT_PUBLIC_FACEBOOK_APP_ID || '';
   const configId = process.env.NEXT_PUBLIC_FACEBOOK_CONFIG_ID || '';
   const notConfigured = !appId || !configId;
@@ -146,7 +149,9 @@ export function WhatsAppEmbeddedSignupButton({
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to connect WhatsApp account');
+        throw new Error(
+          friendlyApiError(res.status, data.error, 'Failed to connect WhatsApp account')
+        );
       }
 
       setStatus('idle');
@@ -237,7 +242,8 @@ export function WhatsAppEmbeddedSignupButton({
     <div className="space-y-2">
       <Button
         onClick={handleConnect}
-        disabled={busy || notConfigured}
+        disabled={busy || notConfigured || !canEditSettings}
+        title={!canEditSettings ? ASK_ADMIN_MESSAGE : undefined}
         className="bg-[#1877F2] hover:bg-[#1877F2]/90 text-white"
       >
         {busy ? (

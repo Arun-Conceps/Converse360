@@ -127,7 +127,7 @@ export interface FormSubmitResult {
 
 export interface FormSubmitPayload {
   answers: Record<string, unknown>;
-  spam: { elapsedMs: number; token?: string };
+  spam: { elapsedMs: number; token?: string; honeypot?: string };
 }
 
 interface FormRendererProps {
@@ -183,6 +183,7 @@ export default function FormRenderer({
 }: FormRendererProps) {
   // Prefills are the INITIAL state rather than an effect, so the inputs
   // are already filled on first paint and nothing flashes empty.
+  const [honeypot, setHoneypot] = useState('')
   const [answers, setAnswers] = useState<Record<string, unknown>>(() =>
     initialAnswersFor(form.fields),
   );
@@ -319,6 +320,8 @@ export default function FormRenderer({
           elapsedMs: Date.now() - startTime,
           // Server-issued at render; lets the API check the timing itself.
           ...(form.spam_token ? { token: form.spam_token } : {}),
+          // Always sent when the trap is armed; a human leaves it empty.
+          ...(form.settings.honeypot ? { honeypot } : {}),
         },
       };
 
@@ -388,13 +391,24 @@ export default function FormRenderer({
 
       {/* Honeypot */}
       {form.settings.honeypot && (
+        // Visually hidden rather than display:none — many bots skip inputs
+        // that are not rendered. Off-screen, not focusable, not announced.
         <input
-          name="_hp"
+          type="text"
+          name="website_url"
+          value={honeypot}
           tabIndex={-1}
           autoComplete="off"
-          style={{ display: 'none' }}
-          aria-hidden
-          onChange={(e) => setAnswer('__honeypot', e.target.value)}
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            left: '-10000px',
+            width: 1,
+            height: 1,
+            opacity: 0,
+            overflow: 'hidden',
+          }}
+          onChange={(e) => setHoneypot(e.target.value)}
         />
       )}
 

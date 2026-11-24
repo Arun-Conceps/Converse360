@@ -1,3 +1,4 @@
+import { secretMatches } from '../lib/secret-compare';
 import {
   Controller,
   Get,
@@ -736,7 +737,7 @@ export class AiController {
       configOwnerUserId?: string;
     },
   ) {
-    if (!secret || secret !== process.env.INTERNAL_API_SECRET) {
+    if (!secretMatches(secret, process.env.INTERNAL_API_SECRET)) {
       throw new HttpException('Unauthorized', HttpStatus.UNAUTHORIZED);
     }
 

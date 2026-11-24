@@ -2,7 +2,8 @@
 
 import { refresh } from 'next/cache';
 
-import { requireCapability } from '@/lib/auth';
+import { recordAudit } from '@/lib/actions/audit';
+import { authorizeAction } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import {
   FieldError,
@@ -43,7 +44,9 @@ const INTENTS = [
  *  - `manually_assigned_by` is left alone. It is a FK to `auth.users`, and the
  *    panel's administrator is an env credential, not a row in that table —
  *    there is no honest value to write. A change made here is therefore not
- *    attributable in the database; an audit table would be the fix.
+ *    attributable in the database; `admin_audit_log` (migration 073) is the
+ *    record instead � every write here calls `recordAudit` with the staff
+ *    actor and a before/after summary (no gateway ids, no secrets).
  *  - Nothing is nulled implicitly. The api's own admin endpoint clears the
  *    Stripe/Razorpay ids on every manual plan assignment; doing that silently
  *    detaches a live gateway subscription that will keep billing the customer.
@@ -66,7 +69,9 @@ export async function updateSubscription(
   _previous: ActionState,
   formData: FormData
 ): Promise<ActionState> {
-  await requireCapability('billing.manage');
+  const auth = await authorizeAction('billing.manage');
+  if (auth.error) return { error: auth.error };
+  const staff = auth.staff;
 
   try {
     const userId = uuid(formData, 'userId', 'User');
@@ -95,6 +100,8 @@ export async function updateSubscription(
     });
     if (!plan) throw new FieldError('That plan no longer exists.');
 
+    const before = await loadSubscription(userId);
+
     await prisma.user_subscriptions.update({
       where: { user_id: userId },
       data: {
@@ -110,6 +117,28 @@ export async function updateSubscription(
       },
     });
 
+    await recordAudit({
+      actor: staff.actor,
+      action: 'subscription.update',
+      targetType: 'subscription',
+      targetId: before.id,
+      userId,
+      summary: `Edited subscription: ${before.status} -> ${status}, plan now ${plan.display_name}.`,
+      detail: {
+        before: subscriptionSnapshot(before),
+        after: {
+          planId,
+          status,
+          billingCycle,
+          paymentMethod: method,
+          periodStart: periodStart?.toISOString() ?? null,
+          periodEnd: periodEnd?.toISOString() ?? null,
+          trialEndAt: trialEndAt?.toISOString() ?? null,
+          cancelAtPeriodEnd,
+        },
+      },
+    });
+
     refresh();
     return { ok: `Saved — now on ${plan.display_name}.` };
   } catch (error) {
@@ -121,7 +150,9 @@ export async function quickSubscriptionAction(
   _previous: ActionState,
   formData: FormData
 ): Promise<ActionState> {
-  await requireCapability('billing.manage');
+  const auth = await authorizeAction('billing.manage');
+  if (auth.error) return { error: auth.error };
+  const staff = auth.staff;
 
   try {
     const userId = uuid(formData, 'userId', 'User');
@@ -129,6 +160,23 @@ export async function quickSubscriptionAction(
     const existing = await loadSubscription(userId);
     const now = new Date();
     const message = await applyIntent(intent, formData, existing, now);
+    const after = await prisma.user_subscriptions.findUnique({
+      where: { user_id: userId },
+    });
+
+    await recordAudit({
+      actor: staff.actor,
+      action: `subscription.${intent}`,
+      targetType: 'subscription',
+      targetId: existing.id,
+      userId,
+      summary: message,
+      detail: {
+        intent,
+        before: subscriptionSnapshot(existing),
+        after: after ? subscriptionSnapshot(after) : null,
+      },
+    });
 
     refresh();
     return { ok: message };
@@ -245,6 +293,29 @@ async function applyIntent(
         'it will keep charging otherwise.'
       );
   }
+}
+
+/** The fields worth auditing; deliberately omits gateway subscription ids. */
+function subscriptionSnapshot(row: {
+  plan_id: string;
+  status: string;
+  billing_cycle: string | null;
+  payment_method: string | null;
+  current_period_start: Date | null;
+  current_period_end: Date | null;
+  trial_end_at: Date | null;
+  cancel_at_period_end: boolean | null;
+}) {
+  return {
+    planId: row.plan_id,
+    status: row.status,
+    billingCycle: row.billing_cycle,
+    paymentMethod: row.payment_method,
+    periodStart: row.current_period_start?.toISOString() ?? null,
+    periodEnd: row.current_period_end?.toISOString() ?? null,
+    trialEndAt: row.trial_end_at?.toISOString() ?? null,
+    cancelAtPeriodEnd: row.cancel_at_period_end,
+  };
 }
 
 function toState(error: unknown): ActionState {

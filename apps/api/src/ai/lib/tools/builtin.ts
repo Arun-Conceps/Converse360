@@ -740,9 +740,23 @@ const assignDeal: BuiltinTool = {
 
     try {
       // A deal id from the model is data, not authority — always scoped.
+      // Pinned to THIS customer's deals as well as the workspace: the
+      // model must not be able to reassign another customer's deal by
+      // naming its id (an id seen in a pasted message, say).
+      if (!ctx.contactId) {
+        return {
+          ok: false,
+          detail:
+            'No customer is attached to this conversation, so there is no deal to assign.',
+        };
+      }
       const deal = requestedDealId
         ? await ctx.prisma.deals.findFirst({
-            where: { id: requestedDealId, account_id: ctx.accountId },
+            where: {
+              id: requestedDealId,
+              account_id: ctx.accountId,
+              contact_id: ctx.contactId,
+            },
             select: { id: true, title: true },
           })
         : ctx.contactId
@@ -761,7 +775,7 @@ const assignDeal: BuiltinTool = {
         return {
           ok: false,
           detail: requestedDealId
-            ? 'That deal does not exist in this workspace.'
+            ? 'That deal does not exist for this customer.'
             : 'This customer has no open deal to assign — create one first.',
         };
       }
@@ -872,64 +886,15 @@ const triggerAutomation: BuiltinTool = {
       required: ['automation_type'],
     },
   },
-  async run(args, ctx) {
-    const automationType = str(args, 'automation_type');
-    const automationId = str(args, 'automation_id');
-
-    if (!automationType) {
-      return { ok: false, detail: 'Automation type is required.' };
-    }
-
-    // Whitelist of allowed automation types to prevent abuse
-    const allowedTypes = [
-      'send_email',
-      'send_sms',
-      'update_contact',
-      'create_task',
-      'notify_team',
-      'add_tag',
-      'add_to_segment',
-      'schedule_followup',
-    ];
-
-    if (!allowedTypes.includes(automationType)) {
-      return {
-        ok: false,
-        detail: `Automation type "${automationType}" is not allowed. Allowed types: ${allowedTypes.join(', ')}`,
-      };
-    }
-
-    if (!ctx.contactId) {
-      return {
-        ok: false,
-        detail:
-          'No customer is attached to this conversation, so automations cannot be triggered. This is a safety measure to prevent unintended actions.',
-      };
-    }
-
-    try {
-      // Log the automation trigger for audit purposes
-      if (ctx.actorUserId) {
-        await ctx.prisma.contact_notes.create({
-          data: {
-            account_id: ctx.accountId,
-            contact_id: ctx.contactId,
-            user_id: ctx.actorUserId,
-            note_text: `[AI Automation] Triggered: ${automationType}${automationId ? ` (${automationId})` : ''}`,
-          },
-        });
-      }
-
-      return {
-        ok: true,
-        detail: `Automation "${automationType}" queued${automationId ? ` (ID: ${automationId})` : ''}. It will be processed in the background.`,
-      };
-    } catch (error) {
-      return {
-        ok: false,
-        detail: `Failed to trigger automation: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      };
-    }
+  async run() {
+    // Never reports success for work that did not happen. The tool is not
+    // offered to the model (the skill carries no tools); this is the
+    // backstop if it is ever reached by another route.
+    return {
+      ok: false,
+      detail:
+        'Automations cannot be triggered from here. Do not tell the customer anything was started; offer to have the team follow up.',
+    };
   },
 };
 
@@ -945,6 +910,19 @@ export const BUILTIN_TOOLS: Record<string, BuiltinTool> = {
   // not connected, and the writing ones withheld again while drafting.
   ...GOOGLE_TOOLS,
 };
+
+/**
+ * Built-in tools that WRITE to this workspace. Withheld in draft mode
+ * ("draft a reply" must not create deals or rewrite a contact for a
+ * customer who never received a message). Google writes live in
+ * `WRITE_GOOGLE_TOOLS`.
+ */
+export const MUTATING_BUILTIN_TOOLS = [
+  'save_lead_details',
+  'create_deal',
+  'assign_deal',
+  'trigger_automation',
+];
 
 export function builtinToolsByName(names: string[]): BuiltinTool[] {
   return names

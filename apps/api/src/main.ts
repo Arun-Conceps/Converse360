@@ -2,9 +2,10 @@ import cookieParser from 'cookie-parser';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import { json, urlencoded } from 'express';
 import type { Request } from 'express';
 import { AppModule } from './app.module';
+import { createBodyParserMiddleware } from './body-limits';
+import { findPlaceholderSecrets } from './startup-checks';
 import {
   QueueDashboardService,
   QUEUE_DASHBOARD_PATH,
@@ -26,7 +27,8 @@ import {
  * lower wins. The two are distinguishable when debugging: nginx returns an HTML
  * error page, this returns Nest's JSON `{"statusCode":413}`.
  */
-const MAX_BODY = '32mb';
+// The size limits themselves now live in ./body-limits.ts: 32 MB only on the
+// base64 upload routes, 1 MB everywhere else (webhooks, unauthenticated routes).
 
 /**
  * WHY THE BODY PARSERS ARE REGISTERED BY HAND
@@ -52,6 +54,15 @@ function captureRawBody(req: Request, _res: unknown, buf: Buffer): void {
 }
 
 async function bootstrap() {
+  if (process.env.NODE_ENV === 'production') {
+    const bad = findPlaceholderSecrets();
+    if (bad.length > 0) {
+      console.error(
+        `FATAL: placeholder CHANGE_ME value in production for: ${bad.join(', ')}`,
+      );
+      process.exit(1);
+    }
+  }
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bodyParser: false,
   });
@@ -66,10 +77,7 @@ async function bootstrap() {
     app.set('trust proxy', trustProxyHops);
   }
 
-  app.use(json({ limit: MAX_BODY, verify: captureRawBody }));
-  app.use(
-    urlencoded({ extended: true, limit: MAX_BODY, verify: captureRawBody }),
-  );
+  app.use(createBodyParserMiddleware(captureRawBody));
 
   app.use(cookieParser());
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));

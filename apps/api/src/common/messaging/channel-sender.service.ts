@@ -1,5 +1,6 @@
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EntitlementService } from '../../subscription/services/entitlement.service';
 import { FlowMetaSendService } from '../../whatsapp/flow-meta-send.service';
 import { InstagramSendService } from '../../instagram/services/instagram-send.service';
 import { WebSendService } from '../../web/services/web-send.service';
@@ -62,6 +63,22 @@ export class NoReachableConversationError extends Error {
   }
 }
 
+/**
+ * Raised when a system-initiated send is refused by the workspace's plan
+ * (lapsed subscription or monthly message cap reached). Engines already
+ * treat a throwing send as a failed step, which is the right outcome:
+ * the message must not leave.
+ */
+export class SendNotAllowedError extends Error {
+  constructor(
+    readonly reason: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'SendNotAllowedError';
+  }
+}
+
 export interface ChannelSendResult {
   /** The platform's own message id — a WhatsApp wamid or an Instagram mid. */
   messageId: string;
@@ -71,6 +88,12 @@ interface BaseArgs {
   accountId: string;
   conversationId: string;
   contactId: string;
+  /**
+   * Skip the plan check and usage count. Only for callers that already
+   * did both themselves (the dashboard/public-API send and broadcasts do
+   * not route through this service, so today nothing needs it).
+   */
+  skipMetering?: boolean;
 }
 
 /**
@@ -132,7 +155,43 @@ export class ChannelSenderService {
     private readonly instagram: InstagramSendService,
     @Inject(forwardRef(() => WebSendService))
     private readonly web: WebSendService,
+    private readonly entitlements: EntitlementService,
   ) {}
+
+  /**
+   * Refuse a system-initiated send when the plan says no.
+   *
+   * 'lapsed' is refused, 'grace' (dunning) is allowed, and a failed
+   * lookup fails OPEN — `checkLimit` encodes all three. Automations,
+   * flows and the AI bot all funnel through here, so a lapsed or
+   * over-quota workspace can no longer keep messaging on autopilot.
+   */
+  async assertCanSend(accountId: string): Promise<void> {
+    const check = await this.entitlements.checkLimit(accountId, 'messages', 1);
+    if (!check.allowed) {
+      throw new SendNotAllowedError(
+        check.reason,
+        this.entitlements.refusalMessage('messages', check),
+      );
+    }
+  }
+
+  /**
+   * Check, run the send, then count it. Public so the template and
+   * product sends (which go to FlowMetaSendService directly) share the
+   * exact same gate as text/media/buttons/list.
+   */
+  async metered<T>(
+    accountId: string,
+    fn: () => Promise<T>,
+    skipMetering = false,
+  ): Promise<T> {
+    if (skipMetering) return fn();
+    await this.assertCanSend(accountId);
+    const result = await fn();
+    await this.entitlements.recordUsage(accountId, 'messages');
+    return result;
+  }
 
   /**
    * Which platform a conversation lives on.
@@ -155,6 +214,16 @@ export class ChannelSenderService {
   }
 
   async sendText(
+    args: BaseArgs & AiAttribution & { text: string },
+  ): Promise<ChannelSendResult> {
+    return this.metered(
+      args.accountId,
+      () => this.sendTextInner(args),
+      args.skipMetering,
+    );
+  }
+
+  private async sendTextInner(
     args: BaseArgs & AiAttribution & { text: string },
   ): Promise<ChannelSendResult> {
     const channel = await this.channelOf(args.accountId, args.conversationId);
@@ -190,6 +259,21 @@ export class ChannelSenderService {
   }
 
   async sendMedia(
+    args: BaseArgs & {
+      kind: MediaKind;
+      link: string;
+      caption?: string;
+      filename?: string;
+    },
+  ): Promise<ChannelSendResult> {
+    return this.metered(
+      args.accountId,
+      () => this.sendMediaInner(args),
+      args.skipMetering,
+    );
+  }
+
+  private async sendMediaInner(
     args: BaseArgs & {
       kind: MediaKind;
       link: string;
@@ -254,6 +338,21 @@ export class ChannelSenderService {
       footerText?: string;
     },
   ): Promise<ChannelSendResult> {
+    return this.metered(
+      args.accountId,
+      () => this.sendButtonsInner(args),
+      args.skipMetering,
+    );
+  }
+
+  private async sendButtonsInner(
+    args: BaseArgs & {
+      bodyText: string;
+      buttons: InteractiveButton[];
+      headerText?: string;
+      footerText?: string;
+    },
+  ): Promise<ChannelSendResult> {
     const channel = await this.channelOf(args.accountId, args.conversationId);
 
     if (channel === 'web') {
@@ -308,6 +407,22 @@ export class ChannelSenderService {
    * would drop options the customer needs.
    */
   async sendList(
+    args: BaseArgs & {
+      bodyText: string;
+      buttonLabel: string;
+      sections: InteractiveListSection[];
+      headerText?: string;
+      footerText?: string;
+    },
+  ): Promise<ChannelSendResult> {
+    return this.metered(
+      args.accountId,
+      () => this.sendListInner(args),
+      args.skipMetering,
+    );
+  }
+
+  private async sendListInner(
     args: BaseArgs & {
       bodyText: string;
       buttonLabel: string;

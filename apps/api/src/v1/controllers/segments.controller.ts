@@ -9,11 +9,13 @@ import {
   Query,
   UseGuards,
   UseFilters,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiKeyGuard } from '../../auth/guards/api-key.guard';
 import { RequireScope } from '../../auth/decorators/require-scope.decorator';
 import { CurrentAccount } from '../../auth/decorators/current-account.decorator';
 import type { AccountContext } from '../../auth/types/account-context.type';
+import { requireUuidArray } from '../utils/uuid.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SegmentMembershipService } from '../../common/segments/segment-membership.service';
 import { ApiExceptionFilter } from '../utils/api-exception.filter';
@@ -132,7 +134,7 @@ export class SegmentsController {
 
   @Get(':id')
   @RequireScope('contacts:read')
-  async get(@CurrentAccount() ctx: AccountContext, @Param('id') id: string) {
+  async get(@CurrentAccount() ctx: AccountContext, @Param('id', ParseUUIDPipe) id: string) {
     const row = await this.prisma.contact_segments.findFirst({
       where: { id, account_id: ctx.accountId },
     });
@@ -145,7 +147,7 @@ export class SegmentsController {
   @RequireScope('contacts:write')
   async update(
     @CurrentAccount() ctx: AccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body()
     body: {
       name?: string;
@@ -192,7 +194,7 @@ export class SegmentsController {
 
   @Delete(':id')
   @RequireScope('contacts:write')
-  async remove(@CurrentAccount() ctx: AccountContext, @Param('id') id: string) {
+  async remove(@CurrentAccount() ctx: AccountContext, @Param('id', ParseUUIDPipe) id: string) {
     const existing = await this.prisma.contact_segments.findFirst({
       where: { id, account_id: ctx.accountId },
       select: { id: true },
@@ -208,7 +210,7 @@ export class SegmentsController {
   @RequireScope('contacts:read')
   async listMembers(
     @CurrentAccount() ctx: AccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Query('limit') limitQuery?: string,
   ) {
     const segment = await this.segments.findForAccount(ctx.accountId, id);
@@ -232,7 +234,7 @@ export class SegmentsController {
   @RequireScope('contacts:write')
   async addMembers(
     @CurrentAccount() ctx: AccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() body: { contact_ids?: string[] },
   ) {
     const segment = await this.segments.findForAccount(ctx.accountId, id);
@@ -242,7 +244,10 @@ export class SegmentsController {
         'Cannot add contacts to a dynamic segment; its membership comes from its filter',
       );
     }
-    const contactIds = Array.isArray(body?.contact_ids) ? body.contact_ids : [];
+    const contactIds = requireUuidArray(
+      Array.isArray(body?.contact_ids) ? body.contact_ids : [],
+      'contact_ids',
+    );
     if (contactIds.length === 0) throw badRequest('contact_ids is required');
     if (contactIds.length > 1000) {
       throw badRequest('contact_ids is limited to 1000 per request');
@@ -259,12 +264,15 @@ export class SegmentsController {
   @RequireScope('contacts:write')
   async removeMembers(
     @CurrentAccount() ctx: AccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() body: { contact_ids?: string[] },
   ) {
     const segment = await this.segments.findForAccount(ctx.accountId, id);
     if (!segment) throw notFound('Segment not found');
-    const contactIds = Array.isArray(body?.contact_ids) ? body.contact_ids : [];
+    const contactIds = requireUuidArray(
+      Array.isArray(body?.contact_ids) ? body.contact_ids : [],
+      'contact_ids',
+    );
     if (contactIds.length === 0) throw badRequest('contact_ids is required');
 
     const removed = await this.segments.remove(segment.id, contactIds);

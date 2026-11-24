@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExecutionContext } from '@nestjs/common';
 import type { Reflector } from '@nestjs/core';
-import { ApiKeyGuard } from './api-key.guard';
+import { ApiKeyGuard, clearApiKeyMemberCache } from './api-key.guard';
 import { ApiError } from '../../v1/utils/respond.util';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { RateLimitService } from '../../common/rate-limit/rate-limit.service';
@@ -27,6 +27,7 @@ const KEY_ROW = {
 function makeContext(authHeader?: string, requiredScope?: string) {
   const request = {
     headers: authHeader ? { authorization: authHeader } : {},
+    ip: '1.2.3.4',
   } as unknown as RequestWithAccountContext;
   const reflector = {
     get: vi.fn().mockReturnValue(requiredScope),
@@ -44,6 +45,9 @@ function makeMocks() {
       findUnique: vi.fn().mockResolvedValue(KEY_ROW),
       update: vi.fn().mockResolvedValue({}),
     },
+    account_members: {
+      findUnique: vi.fn().mockResolvedValue({ role: 'admin' }),
+    },
   };
   const rateLimit = {
     check: vi.fn().mockResolvedValue({
@@ -53,7 +57,13 @@ function makeMocks() {
       reset: Date.now() + 60_000,
     }),
   };
-  return { prisma, rateLimit };
+  const peek = vi.fn().mockResolvedValue({
+    success: true,
+    limit: 60,
+    remaining: 60,
+    reset: Date.now() + 60_000,
+  });
+  return { prisma, rateLimit: { ...rateLimit, peek } };
 }
 
 async function expectApiError(
@@ -80,6 +90,57 @@ describe('ApiKeyGuard', () => {
 
   beforeEach(() => {
     ({ prisma, rateLimit } = makeMocks());
+    clearApiKeyMemberCache();
+  });
+
+  it('401 when the key creator is no longer a member', async () => {
+    prisma.account_members.findUnique.mockResolvedValueOnce(null);
+    const { context, reflector } = makeContext(`Bearer ${VALID_KEY}`);
+    await expectApiError(
+      guardFor(reflector).canActivate(context),
+      401,
+      'unauthorized',
+    );
+  });
+
+  it('401 when the key creator was demoted below admin', async () => {
+    prisma.account_members.findUnique.mockResolvedValueOnce({ role: 'agent' });
+    const { context, reflector } = makeContext(`Bearer ${VALID_KEY}`);
+    await expectApiError(
+      guardFor(reflector).canActivate(context),
+      401,
+      'unauthorized',
+    );
+  });
+
+  it('429 before any DB lookup when the IP is over its invalid-key budget', async () => {
+    rateLimit.peek.mockResolvedValueOnce({
+      success: false,
+      limit: 60,
+      remaining: 0,
+      reset: Date.now() + 30_000,
+    });
+    const { context, reflector } = makeContext(`Bearer ${VALID_KEY}`);
+    await expectApiError(
+      guardFor(reflector).canActivate(context),
+      429,
+      'rate_limited',
+    );
+    expect(prisma.apiKey.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('counts an unknown key against the per-IP failure budget', async () => {
+    prisma.apiKey.findUnique.mockResolvedValueOnce(null);
+    const { context, reflector } = makeContext(`Bearer ${VALID_KEY}`);
+    await expectApiError(
+      guardFor(reflector).canActivate(context),
+      401,
+      'unauthorized',
+    );
+    expect(rateLimit.check).toHaveBeenCalledWith('apikey-fail:1.2.3.4', {
+      limit: 60,
+      windowMs: 60_000,
+    });
   });
 
   function guardFor(reflector: Reflector) {

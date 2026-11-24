@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { hasMinRole } from '../role-rank.util';
 import type { Request } from 'express';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RateLimitService } from '../../common/rate-limit/rate-limit.service';
@@ -17,6 +18,16 @@ import type { RequestWithAccountContext } from '../decorators/current-account.de
 // Imported rather than re-declared: a second copy of this string would let
 // key generation and key validation drift apart silently.
 import { API_KEY_PREFIX } from '../../account/utils/api-keys.util';
+
+/** Failed-key attempts allowed per IP per minute, checked BEFORE the lookup. */
+const INVALID_KEY_LIMIT = { limit: 60, windowMs: 60_000 };
+/** Membership re-check cache. Short enough that a removal bites within seconds. */
+const MEMBER_CACHE_MS = 30_000;
+const memberCache = new Map<string, { ok: boolean; at: number }>();
+/** Test hook. */
+export function clearApiKeyMemberCache(): void {
+  memberCache.clear();
+}
 
 /** Rate limit for the public REST API. */
 const PUBLIC_API_RATE_LIMIT = { limit: 120, windowMs: 60_000 };
@@ -52,15 +63,47 @@ export class ApiKeyGuard implements CanActivate {
     private readonly reflector: Reflector,
   ) {}
 
+  private async noteFailure(failKey: string): Promise<void> {
+    const r = await this.rateLimit.check(failKey, INVALID_KEY_LIMIT);
+    if (!r.success) throw rateLimited(r);
+  }
+
+  private async creatorStillEntitled(
+    accountId: string,
+    createdBy: string | null,
+  ): Promise<boolean> {
+    if (!createdBy) return false;
+    const ck = `${accountId}:${createdBy}`;
+    const hit = memberCache.get(ck);
+    if (hit && Date.now() - hit.at < MEMBER_CACHE_MS) return hit.ok;
+    const m = await this.prisma.account_members.findUnique({
+      where: {
+        account_id_user_id: { account_id: accountId, user_id: createdBy },
+      },
+      select: { role: true },
+    });
+    const ok = !!m && hasMinRole(m.role, 'admin');
+    memberCache.set(ck, { ok, at: Date.now() });
+    return ok;
+  }
+
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context
       .switchToHttp()
       .getRequest<RequestWithAccountContext>();
 
+    const ip = request.ip ?? 'unknown';
+    const failKey = `apikey-fail:${ip}`;
+
     const presented = extractKey(request);
     if (!presented || !looksLikeApiKey(presented)) {
+      await this.noteFailure(failKey);
       throw unauthorized();
     }
+
+    // Already over the failure budget: refuse before touching the database.
+    const pre = await this.rateLimit.peek(failKey, INVALID_KEY_LIMIT);
+    if (!pre.success) throw rateLimited(pre);
 
     const row = await this.prisma.apiKey.findUnique({
       where: { keyHash: hashApiKey(presented) },
@@ -73,6 +116,13 @@ export class ApiKeyGuard implements CanActivate {
       row.revokedAt ||
       (row.expiresAt && row.expiresAt.getTime() <= Date.now())
     ) {
+      await this.noteFailure(failKey);
+      throw unauthorized();
+    }
+
+    // A key must not outlive its creator's standing in the workspace: a
+    // removed or demoted member's key dies with the membership.
+    if (!(await this.creatorStillEntitled(row.accountId, row.createdBy))) {
       throw unauthorized();
     }
 

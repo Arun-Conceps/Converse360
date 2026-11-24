@@ -82,10 +82,31 @@ export function decoyHash(): Promise<string> {
  * reaches production.
  */
 export function generateTemporaryPassword(): string {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
-  const bytes = randomBytes(20);
+  return pickFromAlphabet(TEMP_ALPHABET, 20);
+}
+
+const TEMP_ALPHABET =
+  'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+
+/**
+ * Uniform picks via rejection sampling: `byte % length` favours the first
+ * `256 % length` characters, so bytes at or above the largest multiple of the
+ * alphabet length are discarded instead of folded in.
+ */
+export function pickFromAlphabet(
+  alphabet: string,
+  length: number,
+  random: (n: number) => Uint8Array = randomBytes
+): string {
+  const limit = 256 - (256 % alphabet.length);
   let out = '';
-  for (const byte of bytes) out += alphabet[byte % alphabet.length];
+  while (out.length < length) {
+    for (const byte of random(length * 2)) {
+      if (byte >= limit) continue;
+      out += alphabet[byte % alphabet.length];
+      if (out.length === length) break;
+    }
+  }
   return out;
 }
 

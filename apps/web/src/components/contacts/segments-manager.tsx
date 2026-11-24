@@ -109,8 +109,12 @@ export function SegmentsPanel({ onChanged }: { onChanged?: () => void }) {
     try {
       const [rows, tagRes, fieldRes] = await Promise.all([
         listSegments(supabase, accountId),
-        supabase.from('tags').select('*').order('name'),
-        supabase.from('custom_fields').select('*').order('field_name'),
+        supabase.from('tags').select('*').eq('account_id', accountId).order('name'),
+        supabase
+          .from('custom_fields')
+          .select('*')
+          .eq('account_id', accountId)
+          .order('field_name'),
       ]);
       setSegments(rows);
       setTags((tagRes.data as Tag[] | null) ?? []);

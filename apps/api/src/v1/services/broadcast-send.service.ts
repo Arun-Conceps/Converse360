@@ -1,7 +1,13 @@
 import { Injectable, HttpStatus } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { sanitizePhoneForMeta, isValidE164 } from '../utils/phone.util';
-import { findOrCreateContact } from '../utils/contacts.util';
+import {
+  sanitizePhoneForMeta,
+  isValidE164,
+  normalizePhone,
+  phonesMatch,
+  toE164,
+} from '../utils/phone.util';
+import { resolveAccountCountry } from '../../common/phone/account-country.util';
 import { optedOutIds } from '../../common/contacts/contact-opt-out';
 import { ApiError } from '../utils/respond.util';
 import { WebhookDeliverService } from './webhook-deliver.service';
@@ -123,31 +129,118 @@ export class BroadcastSendService {
       );
     }
 
-    const resolved: { contactId: string; phone: string; params: string[] }[] =
-      [];
+    // Valid, canonical recipients first; no DB work yet.
+    const country = await resolveAccountCountry(this.prisma, accountId);
+    const wanted: { phone: string; params: string[] }[] = [];
     let rejected = 0;
     for (const r of recipients) {
       const sanitized = sanitizePhoneForMeta(
         typeof r.to === 'string' ? r.to : '',
       );
-      if (!isValidE164(sanitized)) {
+      const canonical = isValidE164(sanitized)
+        ? toE164(sanitized, country)
+        : null;
+      if (!canonical) {
         rejected++;
         continue;
       }
-      const { id } = await findOrCreateContact(
-        this.prisma,
-        this.webhookDeliver,
-        accountId,
-        auditUserId,
-        { phone: sanitized },
-      );
-      resolved.push({
-        contactId: id,
-        phone: sanitized,
+      wanted.push({
+        phone: canonical,
         params: Array.isArray(r.params)
           ? r.params.filter((p): p is string => typeof p === 'string')
           : [],
       });
+    }
+
+    // One lookup for every existing contact (same suffix + phonesMatch rule
+    // as findExistingContact) instead of one query per recipient.
+    const suffixes = [
+      ...new Set(
+        wanted.map((w) => {
+          const n = normalizePhone(w.phone);
+          return n.length >= 8 ? n.slice(-8) : n;
+        }),
+      ),
+    ];
+    const candidates =
+      suffixes.length === 0
+        ? []
+        : await this.prisma.contacts.findMany({
+            where: {
+              account_id: accountId,
+              OR: suffixes.map((sfx) => ({ phone: { endsWith: sfx } })),
+            },
+            select: { id: true, phone: true },
+          });
+
+    const idByPhone = new Map<string, string>();
+    const toCreate: string[] = [];
+    const queued = new Set<string>();
+    for (const w of wanted) {
+      if (idByPhone.has(w.phone) || queued.has(w.phone)) continue;
+      const hit = candidates.find((c) => phonesMatch(c.phone, w.phone));
+      if (hit) idByPhone.set(w.phone, hit.id);
+      else {
+        queued.add(w.phone);
+        toCreate.push(w.phone);
+      }
+    }
+
+    // Creating contacts spends the contacts allowance; refuse before any
+    // row is written rather than part-way through a 1000-row loop.
+    if (toCreate.length > 0) {
+      const room = await this.entitlements.checkLimit(
+        accountId,
+        'contacts',
+        toCreate.length,
+      );
+      if (!room.allowed) {
+        throw new ApiError(
+          room.reason === 'subscription_lapsed'
+            ? 'subscription_lapsed'
+            : 'plan_limit_reached',
+          `This broadcast would create ${toCreate.length} new contacts. ` +
+            this.entitlements.refusalMessage('contacts', room),
+          HttpStatus.PAYMENT_REQUIRED,
+        );
+      }
+
+      await this.prisma.contacts.createMany({
+        data: toCreate.map((phone) => ({
+          account_id: accountId,
+          user_id: auditUserId,
+          phone,
+          name: phone,
+          source: 'api',
+        })),
+        skipDuplicates: true,
+      });
+      const made = await this.prisma.contacts.findMany({
+        where: { account_id: accountId, phone: { in: toCreate } },
+        select: { id: true, phone: true },
+      });
+      for (const c of made) if (c.phone) idByPhone.set(c.phone, c.id);
+      for (const phone of toCreate) {
+        const id = idByPhone.get(phone);
+        if (id) {
+          void this.webhookDeliver.dispatchWebhookEvent(
+            accountId,
+            'contact.created',
+            { contact_id: id, phone, name: phone },
+          );
+        }
+      }
+    }
+
+    const resolved: { contactId: string; phone: string; params: string[] }[] =
+      [];
+    for (const w of wanted) {
+      const contactId = idByPhone.get(w.phone);
+      if (!contactId) {
+        rejected++;
+        continue;
+      }
+      resolved.push({ contactId, phone: w.phone, params: w.params });
     }
 
     const seenContact = new Set<string>();

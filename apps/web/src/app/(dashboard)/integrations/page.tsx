@@ -37,6 +37,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useCan } from '@/hooks/use-can';
+import { friendlyApiError, ASK_ADMIN_MESSAGE } from '@/lib/auth/forbidden';
 import { GatedButton } from '@/components/ui/gated-button';
 import { ConnectedApps } from '@/components/integrations/connected-apps';
 import {
@@ -105,7 +106,7 @@ export default function IntegrationsPage() {
         method: 'POST',
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Sync failed');
+      if (!res.ok) throw new Error(friendlyApiError(res.status, data.error, 'Sync failed'));
 
       toast.success(`Synced ${data.products_synced || 0} products and ${data.orders_synced || 0} orders`);
     } catch (err: any) {
@@ -130,7 +131,11 @@ export default function IntegrationsPage() {
       toast.success('Integration deleted successfully');
       await fetchStatuses();
     } catch (err: any) {
-      toast.error('Failed to delete integration');
+      toast.error(
+        err?.code === '42501' || err?.status === 403
+          ? ASK_ADMIN_MESSAGE
+          : 'Failed to delete integration',
+      );
     } finally {
       setDeleting(null);
     }
@@ -176,7 +181,7 @@ export default function IntegrationsPage() {
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to create integration');
+      if (!res.ok) throw new Error(friendlyApiError(res.status, data.error, 'Failed to create integration'));
 
       toast.success('Integration connected successfully!');
       setFormData({
@@ -500,7 +505,7 @@ export default function IntegrationsPage() {
                                 <Button
                                   size="sm"
                                   variant="outline"
-                                  disabled={syncing === store.id}
+                                  disabled={syncing === store.id || !canCreate}
                                   onClick={() => handleSync(store.id)}
                                   className="h-8 text-[11px]"
                                 >
@@ -515,7 +520,7 @@ export default function IntegrationsPage() {
                                 <Button
                                   size="sm"
                                   variant="destructive"
-                                  disabled={deleting === store.id}
+                                  disabled={deleting === store.id || !canCreate}
                                   onClick={() => handleDelete(store.id)}
                                   className="h-8 text-[11px] p-2"
                                 >

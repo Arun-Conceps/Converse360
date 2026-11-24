@@ -1,4 +1,4 @@
-import { Inject, Injectable, forwardRef } from '@nestjs/common';
+import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import type { Prisma } from '@prisma/client';
@@ -138,6 +138,8 @@ function truncateOutput(output: unknown): unknown {
  */
 @Injectable()
 export class AutomationStepExecutorService {
+  private readonly logger = new Logger(AutomationStepExecutorService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly condition: AutomationConditionService,
@@ -937,31 +939,35 @@ export class AutomationStepExecutorService {
             )
           : undefined;
 
-        const { whatsapp_message_id } = await this.metaSend.sendTemplate({
-          accountId: args.automation.accountId,
-          conversationId,
-          contactId: args.contactId,
-          templateName: cfg.template_name,
-          language: cfg.language,
-          params,
-          headerText: fill(cfg.header_text),
-          headerMediaUrl: fill(cfg.header_media_url),
-          headerLocation: cfg.header_location
-            ? {
-                latitude: interpolate(
-                  cfg.header_location.latitude,
-                  templateContext,
-                ),
-                longitude: interpolate(
-                  cfg.header_location.longitude,
-                  templateContext,
-                ),
-                name: fill(cfg.header_location.name),
-                address: fill(cfg.header_location.address),
-              }
-            : undefined,
-          buttonParams,
-        });
+        const { whatsapp_message_id } = await this.channelSender.metered(
+          args.automation.accountId,
+          () =>
+            this.metaSend.sendTemplate({
+              accountId: args.automation.accountId,
+              conversationId,
+              contactId: args.contactId as string,
+              templateName: cfg.template_name,
+              language: cfg.language,
+              params,
+              headerText: fill(cfg.header_text),
+              headerMediaUrl: fill(cfg.header_media_url),
+              headerLocation: cfg.header_location
+                ? {
+                    latitude: interpolate(
+                      cfg.header_location.latitude,
+                      templateContext,
+                    ),
+                    longitude: interpolate(
+                      cfg.header_location.longitude,
+                      templateContext,
+                    ),
+                    name: fill(cfg.header_location.name),
+                    address: fill(cfg.header_location.address),
+                  }
+                : undefined,
+              buttonParams,
+            }),
+        );
         return `template sent via Meta (${whatsapp_message_id})`;
       }
 
@@ -1123,6 +1129,18 @@ export class AutomationStepExecutorService {
           agentId = ids[0];
         }
         if (!agentId) return 'no agent resolved';
+        // The id comes from step config (or a hand-edit of it) and Prisma
+        // bypasses RLS: confirm it is a member of THIS workspace before
+        // handing a customer thread to it. Skipped, not failed, like
+        // notify_team — the rest of the run is still valid.
+        if (
+          !(await isMember(this.prisma, args.automation.accountId, agentId))
+        ) {
+          this.logger.warn(
+            `[automations] assign_conversation skipped: ${agentId} is not a member of account ${args.automation.accountId}`,
+          );
+          return 'agent is not a member of this workspace — skipped';
+        }
         await this.prisma.conversations.updateMany({
           // Channel-scoped — assigning an Instagram thread must not
           // also reassign the contact's WhatsApp one.
