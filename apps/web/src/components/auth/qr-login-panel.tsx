@@ -50,13 +50,14 @@ export function QrLoginPanel({ destination, onError }: Props) {
       setCode(null);
       let id: string;
       let secret: string;
+      let pollSecret: string;
       let expiresIn: number;
       try {
         const res = await fetch("/api/public/qr-login/start", {
           method: "POST",
         });
         if (!res.ok) throw new Error(String(res.status));
-        ({ id, secret, expiresIn } = await res.json());
+        ({ id, secret, pollSecret, expiresIn } = await res.json());
       } catch {
         if (!cancelled.current) fail("Could not create a QR code. Try again.");
         return;
@@ -78,7 +79,7 @@ export function QrLoginPanel({ destination, onError }: Props) {
           const res = await fetch("/api/public/qr-login/status", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id, secret }),
+            body: JSON.stringify({ id, secret: pollSecret }),
             cache: "no-store",
           });
           if (res.ok) {

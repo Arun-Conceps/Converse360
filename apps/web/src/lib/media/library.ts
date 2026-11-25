@@ -79,11 +79,13 @@ function cleanFolderName(name: string): string {
 
 /** Postgres 23505 on the (account, lower(name)) index. */
 function folderError(error: { code?: string; message: string }): Error {
-  return new Error(
-    error.code === '23505'
-      ? 'A folder with that name already exists.'
-      : error.message
-  );
+  if (error.code === '23505')
+    return new Error('A folder with that name already exists.');
+  // PGRST205/42P01: the table is missing (migration not applied). Never show
+  // an internal table name to the user (BUG-002).
+  if (error.code === 'PGRST205' || error.code === '42P01')
+    return new Error('Folders are not available yet. Please try again later.');
+  return new Error(error.message);
 }
 
 export async function listFolders(accountId: string): Promise<MediaFolder[]> {

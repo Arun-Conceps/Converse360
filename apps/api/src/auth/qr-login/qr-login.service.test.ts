@@ -39,4 +39,16 @@ describe('QrLoginService origin', () => {
     );
     await expect(svc.peek('u', id, 'a'.repeat(64))).rejects.toThrow();
   });
+  it('poll accepts only the browser poll secret, never the QR secret', async () => {
+    const { svc, hset, redis } = make();
+    const { id, secret, pollSecret } = await svc.start('1.1.1.1', 'UA');
+    redis.hgetall.mockResolvedValue(
+      hset.mock.calls[0][1] as Record<string, string>,
+    );
+    expect(pollSecret).not.toBe(secret);
+    await expect(svc.poll(id, secret)).rejects.toThrow();
+    await expect(svc.poll(id, pollSecret)).resolves.toEqual({
+      status: 'pending',
+    });
+  });
 });

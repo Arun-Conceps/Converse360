@@ -88,6 +88,7 @@ export default function ContactsPage() {
 
   const [contacts, setContacts] = useState<ContactWithTags[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
@@ -168,6 +169,7 @@ export default function ContactsPage() {
     if (!accountId) return;
     const seq = ++fetchSeq.current;
     setLoading(true);
+    setLoadError(false);
     // The visible rows are about to change — drop any selection that
     // referred to the old page/search results so the bulk bar can't
     // act on rows the user can no longer see.
@@ -202,6 +204,7 @@ export default function ContactsPage() {
       if (seq !== fetchSeq.current) return; // superseded by a newer fetch
       if (error) {
         toast.error('Failed to load contacts');
+        setLoadError(true);
         setLoading(false);
         return;
       }
@@ -228,6 +231,7 @@ export default function ContactsPage() {
       if (seq !== fetchSeq.current) return; // superseded by a newer fetch
       if (error) {
         toast.error('Failed to load contacts');
+        setLoadError(true);
         setLoading(false);
         return;
       }
@@ -866,11 +870,23 @@ export default function ContactsPage() {
                   <div className="flex flex-col items-center gap-2">
                     <Users className="size-8 text-muted-foreground" />
                     <p className="text-sm text-muted-foreground">
-                      {hasActiveFilters
+                      {loadError
+                        ? "We couldn't load your contacts. Please try again."
+                        : hasActiveFilters
                         ? 'No contacts match your filters.'
                         : 'No contacts yet.'}
                     </p>
-                    {!hasActiveFilters && (
+                    {loadError && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void fetchContacts()}
+                        className="mt-2"
+                      >
+                        Retry
+                      </Button>
+                    )}
+                    {!hasActiveFilters && !loadError && (
                       <GatedButton
                         canAct={canEdit}
                         gateReason="add or import contacts"

@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Post,
   Put,
   Res,
@@ -78,7 +79,7 @@ export class FlowsController {
 
   @Get(':id')
   async getOne(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentAccount() account: SupabaseAccountContext,
   ) {
     return this.flows.getOne(id, account.accountId);
@@ -87,7 +88,7 @@ export class FlowsController {
   @Put(':id')
   @RequireRole('agent')
   async update(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentAccount() account: SupabaseAccountContext,
     @Body() body: UpdateFlowDto,
   ) {
@@ -97,7 +98,7 @@ export class FlowsController {
   @Delete(':id')
   @RequireRole('agent')
   async remove(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentAccount() account: SupabaseAccountContext,
   ) {
     await this.flows.remove(id, account.accountId);
@@ -108,7 +109,7 @@ export class FlowsController {
   @RequiresEntitlement('flows')
   @RequireRole('agent')
   async activate(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentAccount() account: SupabaseAccountContext,
     @Body() body: ActivateFlowDto,
   ) {
@@ -123,7 +124,7 @@ export class FlowsController {
    */
   @Get(':id/export')
   async export(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentAccount() account: SupabaseAccountContext,
     @Res() res: Response,
   ) {
@@ -142,7 +143,7 @@ export class FlowsController {
 
   @Get(':id/runs')
   async runs(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentAccount() account: SupabaseAccountContext,
   ) {
     return this.flows.listRuns(id, account.accountId);

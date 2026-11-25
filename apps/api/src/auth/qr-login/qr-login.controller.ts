@@ -1,12 +1,4 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Post,
-  Query,
-  Req,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import {
   CurrentUserId,
@@ -32,12 +24,10 @@ export class QrLoginController {
     );
   }
 
-  @Get('status')
-  status(@Query('id') id: string, @Query('secret') secret: string) {
-    return this.qr.poll(id, secret);
-  }
-
-  /** Same as GET, but the secret travels in the body, not in URLs/logs. */
+  /**
+   * POST only: the secret travels in the body, never in a URL where proxies
+   * and access logs would record it (BUG-014).
+   */
   @Post('status')
   statusPost(@Body() body: { id?: string; secret?: string }) {
     return this.qr.poll(body?.id ?? '', body?.secret ?? '');

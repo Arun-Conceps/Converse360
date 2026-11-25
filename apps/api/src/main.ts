@@ -77,6 +77,17 @@ async function bootstrap() {
     app.set('trust proxy', trustProxyHops);
   }
 
+  // Hardening headers (BUG-015). Set by hand rather than via `helmet` to avoid
+  // a new dependency; a JSON API needs only these. No HSTS here: TLS is
+  // terminated by the host proxy, which owns that header.
+  app.disable('x-powered-by');
+  app.use((_req: unknown, res: { setHeader(k: string, v: string): void }, next: () => void) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    next();
+  });
+
   app.use(createBodyParserMiddleware(captureRawBody));
 
   app.use(cookieParser());

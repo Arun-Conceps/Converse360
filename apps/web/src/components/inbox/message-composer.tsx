@@ -894,10 +894,12 @@ export function MessageComposer({
                   </span>
                   <button
                     type="button"
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      setQrManageOpen(true);
-                    }}
+                    // mousedown only keeps the textarea focused (so the list
+                    // does not close); the dialog opens on click. Opening on
+                    // mousedown let the same gesture's mouseup/click land
+                    // "outside" the new dialog and dismiss it at once (BUG-009).
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setQrManageOpen(true)}
                     className="text-primary text-[11px] font-medium hover:underline"
                   >
                     {canSend ? 'Manage quick replies' : 'View quick replies'}

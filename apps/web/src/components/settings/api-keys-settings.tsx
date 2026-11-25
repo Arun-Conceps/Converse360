@@ -85,8 +85,23 @@ export function ApiKeysSettings() {
         toast.error(friendlyApiError(res.status, payload.error, 'Failed to load API keys'));
         return;
       }
-      const data = (await res.json()) as { keys: ApiKey[] };
-      setKeys(data.keys);
+      // The API serialises Prisma's camelCase fields; normalise to the
+      // snake_case shape this component renders (BUG-018).
+      const data = (await res.json()) as { keys: Record<string, unknown>[] };
+      setKeys(
+        data.keys.map((k) => ({
+          id: k.id as string,
+          name: k.name as string,
+          key_prefix: (k.keyPrefix ?? k.key_prefix ?? '') as string,
+          scopes: (k.scopes ?? []) as string[],
+          last_used_at: (k.lastUsedAt ?? k.last_used_at ?? null) as
+            | string
+            | null,
+          expires_at: (k.expiresAt ?? k.expires_at ?? null) as string | null,
+          revoked_at: (k.revokedAt ?? k.revoked_at ?? null) as string | null,
+          created_at: (k.createdAt ?? k.created_at ?? '') as string,
+        })),
+      );
     } catch (err) {
       console.error('[ApiKeysSettings] load error:', err);
       toast.error('Could not reach the server');

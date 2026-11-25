@@ -102,9 +102,9 @@ export function PipelineAnalytics({ stages, deals }: PipelineAnalyticsProps) {
         />
         <Metric
           icon={<DollarSign className="h-4 w-4 text-primary" />}
-          label="Pipeline Value"
+          label="Pipeline Value (open + won)"
           value={formatCurrency(stats.totalValue, defaultCurrency)}
-          tooltip="Sum of the dollar values of all deals in this pipeline, excluding deals marked as Lost."
+          tooltip="Sum of the values of deals in THIS pipeline that are open or won, excluding Lost. The Home dashboard's Open Deals Value counts open deals only, across all pipelines."
         />
         <Metric
           icon={<Target className="h-4 w-4 text-accent-blue" />}

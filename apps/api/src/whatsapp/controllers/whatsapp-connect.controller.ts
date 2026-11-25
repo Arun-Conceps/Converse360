@@ -139,17 +139,41 @@ export class WhatsappConnectController {
     @CurrentAccount() account: SupabaseAccountContext,
     @Res() res: Response,
   ) {
-    const config = await this.prisma.whatsapp_config.findUnique({
-      where: { account_id: account.accountId },
-      select: {
-        phone_number_id: true,
-        access_token: true,
-        status: true,
-        token_expires_at: true,
-        catalog_id: true,
-        registered_at: true,
-      },
-    });
+    let config: {
+      phone_number_id: string;
+      access_token: string;
+      status: string;
+      token_expires_at: Date | null;
+      catalog_id: string | null;
+      registered_at: Date | null;
+    } | null;
+    try {
+      config = await this.prisma.whatsapp_config.findUnique({
+        where: { account_id: account.accountId },
+        select: {
+          phone_number_id: true,
+          access_token: true,
+          status: true,
+          token_expires_at: true,
+          catalog_id: true,
+          registered_at: true,
+        },
+      });
+    } catch (err) {
+      // This runs on every dashboard page load; a failed read must degrade
+      // to a readable state rather than a bare 500 (BUG-003). The real
+      // cause is in this log line (typically a column the database lacks
+      // because a migration was not applied).
+      this.logger.error(
+        `whatsapp_config read failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return res.status(HttpStatus.OK).json({
+        connected: false,
+        reason: 'config_unavailable',
+        message:
+          'We could not read your WhatsApp configuration. Please try again shortly.',
+      });
+    }
 
     if (!config) {
       return res.status(HttpStatus.OK).json({

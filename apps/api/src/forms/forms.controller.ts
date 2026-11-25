@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   UseGuards,
@@ -67,7 +68,7 @@ export class FormsController {
   @Get(':id')
   async get(
     @CurrentAccount() account: SupabaseAccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ): Promise<FormJson> {
     return this.forms.get(account.accountId, id);
   }
@@ -92,7 +93,7 @@ export class FormsController {
   @RequireRole('admin')
   async update(
     @CurrentAccount() account: SupabaseAccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() body: UpdateFormDto,
   ): Promise<FormJson> {
     return this.forms.update(account.accountId, id, {
@@ -112,7 +113,7 @@ export class FormsController {
   @RequireRole('admin')
   async publish(
     @CurrentAccount() account: SupabaseAccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ): Promise<FormJson> {
     return this.forms.publish(account.accountId, id);
   }
@@ -121,7 +122,7 @@ export class FormsController {
   @RequireRole('admin')
   async unpublish(
     @CurrentAccount() account: SupabaseAccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ): Promise<FormJson> {
     return this.forms.unpublish(account.accountId, id);
   }
@@ -130,7 +131,7 @@ export class FormsController {
   @RequireRole('admin')
   async duplicate(
     @CurrentAccount() account: SupabaseAccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ): Promise<FormJson> {
     return this.forms.duplicate(account.accountId, account.userId, id);
   }
@@ -139,7 +140,7 @@ export class FormsController {
   @RequireRole('admin')
   async archive(
     @CurrentAccount() account: SupabaseAccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ): Promise<{ success: true }> {
     await this.forms.archive(account.accountId, id);
     return { success: true };
@@ -148,7 +149,7 @@ export class FormsController {
   @Get(':id/submissions')
   async listSubmissions(
     @CurrentAccount() account: SupabaseAccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.forms.listSubmissions(account.accountId, id);
   }

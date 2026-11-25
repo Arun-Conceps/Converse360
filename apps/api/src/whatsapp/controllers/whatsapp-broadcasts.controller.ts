@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Param,
+  ParseUUIDPipe,
   Body,
   Res,
   HttpStatus,
@@ -99,11 +100,20 @@ export class WhatsappBroadcastsController {
   @RequireRole('agent')
   async cancel(
     @CurrentAccount() account: SupabaseAccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Res() res: Response,
   ) {
     const ok = await this.schedule.cancel(account.accountId, id);
     if (!ok) {
+      const exists = await this.prisma.broadcasts.findFirst({
+        where: { id, account_id: account.accountId },
+        select: { id: true },
+      });
+      if (!exists) {
+        return res
+          .status(HttpStatus.NOT_FOUND)
+          .json({ error: 'Broadcast not found.' });
+      }
       return res.status(HttpStatus.CONFLICT).json({
         error: 'Only a broadcast that has not started can be cancelled.',
       });
@@ -114,7 +124,7 @@ export class WhatsappBroadcastsController {
   @Get('broadcasts/:id')
   async getStatus(
     @CurrentAccount() account: SupabaseAccountContext,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Res() res: Response,
   ) {
     const broadcast = await this.prisma.broadcasts.findFirst({

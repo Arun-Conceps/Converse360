@@ -57,11 +57,17 @@ export class QrLoginService {
   async start(ip: string, userAgent = '') {
     await this.throttle(`qr-start:${ip}`, 20, 60_000);
     const id = randomBytes(16).toString('hex');
+    // Two secrets (BUG-017): `secret` is printed in the QR and is what the
+    // phone presents; `pollSecret` never leaves the requesting browser and is
+    // the only thing that can collect the login. Photographing or forwarding
+    // the QR therefore cannot steal the session.
     const secret = randomBytes(32).toString('hex');
+    const pollSecret = randomBytes(32).toString('hex');
     await this.redis
       .multi()
       .hset(key(id), {
         secret: sha256(secret).toString('hex'),
+        pollSecret: sha256(pollSecret).toString('hex'),
         status: 'pending',
         // Shown on the approving phone so a user can spot a QR that was
         // started by somebody else (QR-phishing / "quishing").
@@ -71,7 +77,7 @@ export class QrLoginService {
       })
       .expire(key(id), TTL_SECONDS)
       .exec();
-    return { id, secret, expiresIn: TTL_SECONDS };
+    return { id, secret, pollSecret, expiresIn: TTL_SECONDS };
   }
 
   async poll(id: string, secret: string): Promise<QrStatus> {
@@ -79,7 +85,9 @@ export class QrLoginService {
     await this.throttle(`qr-poll:${id}`, 120, 60_000);
     const rec = await this.redis.hgetall(key(id));
     if (!rec.secret) return { status: 'expired' };
-    if (!this.matches(rec.secret, secret)) throw new NotFoundException();
+    // The QR secret must NOT be accepted here, or the split buys nothing.
+    if (!rec.pollSecret || !this.matches(rec.pollSecret, secret))
+      throw new NotFoundException();
     if (rec.status !== 'approved') return { status: 'pending' };
     // One-time: whoever deletes the record first owns the token.
     const taken = await this.redis.del(key(id));

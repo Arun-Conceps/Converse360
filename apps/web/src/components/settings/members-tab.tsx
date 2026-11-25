@@ -381,7 +381,7 @@ export function MembersTab() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <span className="truncate text-sm font-medium text-foreground">
-                          {member.full_name || 'Unnamed'}
+                          {member.full_name || member.email || 'Unnamed'}
                         </span>
                         {isSelf && (
                           <Badge className="bg-muted text-muted-foreground border-border text-[10px] uppercase tracking-wide">
@@ -389,7 +389,7 @@ export function MembersTab() {
                           </Badge>
                         )}
                       </div>
-                      {member.email && (
+                      {member.email && member.full_name && (
                         <p className="truncate text-xs text-muted-foreground">
                           {member.email}
                         </p>
